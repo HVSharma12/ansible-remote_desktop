@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MIT
+---
+# Runs the role with the caller's variables; sets __rd_refused and __rd_refusal, the failure message
+- name: Run the role, expecting a refusal
+  block:
+    - name: Run the role
+      ansible.builtin.include_tasks: run_role_with_clear_facts.yml
+
+    - name: Record that the role did not refuse
+      ansible.builtin.set_fact:
+        __rd_refused: false
+        __rd_refusal: ""
+  rescue:
+    - name: Record the refusal
+      ansible.builtin.set_fact:
+        __rd_refused: true
+        __rd_refusal: >-
+          {{ ([ansible_failed_result.msg | d('')]
+          + (ansible_failed_result.results | d([]) | map(attribute='msg') | map('default', '') | list))
+          | map('string') | join(' ') }}

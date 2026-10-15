@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: MIT
+---
+# Input: __rd_auth_user, __rd_auth_pass and __rd_auth_expect (ok, wrong_password, denied or no_listener)
+- name: Authenticate over RDP without a display
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -o pipefail
+      env -u DISPLAY -u WAYLAND_DISPLAY timeout 120 xfreerdp /v:127.0.0.1:3389 "/u:$RD_TEST_USER" "/p:$RD_TEST_PASS" \
+        /cert:ignore /auth-only 2>&1 | tail -n 5
+  environment:
+    RD_TEST_USER: "{{ __rd_auth_user }}"
+    RD_TEST_PASS: "{{ __rd_auth_pass }}"
+  register: __rd_auth
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+# The exit status for an unknown user name is not measured; denied accepts any refusal by a listening server
+- name: Assert the RDP authentication result
+  ansible.builtin.assert:
+    that:
+      - __rd_auth_expect != 'denied' or __rd_auth.rc not in [0, 124, 126, 127, 141]
+      - __rd_auth_expect == 'denied' or __rd_auth.rc == __rd_auth_codes[__rd_auth_expect]
+    fail_msg: >-
+      xfreerdp /auth-only as {{ __rd_auth_user }} returned {{ __rd_auth.rc }}, expected
+      {{ __rd_auth_expect }}: {{ __rd_auth.stdout_lines | d([]) | join(' | ') | replace(__rd_auth_pass, '<password>') }}
+    quiet: true
+  vars:
+    __rd_auth_codes:
+      ok: 0
+      wrong_password: 134
+      no_listener: 141

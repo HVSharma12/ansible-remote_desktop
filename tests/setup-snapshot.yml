@@ -3,12 +3,12 @@
   hosts: all
   tasks:
     - name: Set platform/version specific variables
-      include_role:
-        name: linux-system-roles.template
+      ansible.builtin.include_role:
+        name: linux-system-roles.remote_desktop
         tasks_from: set_vars.yml
         public: true
 
     - name: Install test packages
-      package:
-        name: "{{ __template_packages }}"
+      ansible.builtin.package:
+        name: "{{ __remote_desktop_packages + ['freerdp'] }}"
         state: present

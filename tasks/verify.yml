@@ -1,0 +1,81 @@
+# SPDX-License-Identifier: MIT
+---
+- name: Verify that gnome-remote-desktop itself listens on the RDP port
+  block:
+    - name: Wait until gnome-remote-desktop itself listens on the RDP port
+      ansible.builtin.shell:  # noqa command-instead-of-module
+        cmd: systemctl show -P MainPID "$GRD_UNIT" && ss -Hltnp "sport = :$GRD_PORT"
+      environment:
+        GRD_UNIT: "{{ __remote_desktop_service }}"
+        GRD_PORT: "{{ __remote_desktop_port | string }}"
+      register: __remote_desktop_listener
+      changed_when: false
+      until: __pid != '0' and __pid in __pids
+      retries: "{{ __remote_desktop_listen_retries }}"
+      delay: "{{ __remote_desktop_listen_delay }}"
+      vars:
+        __pid: "{{ __remote_desktop_listener.stdout_lines | first | d('0') }}"
+        __pids: "{{ __remote_desktop_listener.stdout_lines[1:] | join(' ')
+          | regex_findall('pid=([0-9]+),') }}"
+  rescue:
+    - name: Report why gnome-remote-desktop does not listen
+      ansible.builtin.fail:
+        msg: >-
+          gnome-remote-desktop does not listen on TCP port {{ __remote_desktop_port }}.
+          {{ ('The port is held by ' ~ __others | join(', ') ~ '.') if __others | length > 0
+          else 'See journalctl -u gnome-remote-desktop and
+          busctl --system tree org.gnome.DisplayManager.' }}
+      vars:
+        __lines: "{{ __remote_desktop_listener.stdout_lines | d([]) }}"
+        __others: "{{ __lines[1:] | join(' ') | regex_findall(__remote_desktop_ss_process_pattern)
+          | rejectattr('1', 'eq', __lines | first | d('0')) | map('join', ' pid ')
+          | unique | list }}"
+
+- name: Check the certificate gnome-remote-desktop serves
+  vars:
+    __served: "{{ __remote_desktop_served.stdout | d('')
+      | regex_findall(__remote_desktop_busctl_string_pattern) | first | d('') | lower }}"
+    __configured: "{{ __remote_desktop_configured.stdout.split('=', 1) | last | trim | lower }}"
+  block:
+    - name: Read the fingerprint of the certificate gnome-remote-desktop serves
+      ansible.builtin.command:
+        argv:
+          - busctl
+          - --system
+          - get-property
+          - org.gnome.RemoteDesktop
+          - /org/gnome/RemoteDesktop/Rdp/Server
+          - org.gnome.RemoteDesktop.Rdp.Server
+          - TlsFingerprint
+      register: __remote_desktop_served
+      changed_when: false
+      failed_when: false
+
+    - name: Read the fingerprint of the configured certificate as the service account
+      ansible.builtin.command:
+        argv: "{{ __remote_desktop_runuser + ['openssl', 'x509', '-noout', '-fingerprint',
+          '-sha256', '-in', __remote_desktop_active_cert] }}"
+        chdir: "{{ __remote_desktop_home }}"
+      register: __remote_desktop_configured
+      changed_when: false
+
+    - name: Assert gnome-remote-desktop serves the configured certificate
+      ansible.builtin.assert:
+        that:
+          - __served | length == 0 or __served == __configured
+        fail_msg: >-
+          gnome-remote-desktop serves a certificate with the SHA-256 fingerprint
+          {{ __served }}, but {{ __remote_desktop_active_cert }} has {{ __configured }}.
+        quiet: true
+
+    - name: Report that the served fingerprint could not be read
+      ansible.builtin.debug:
+        msg: >-
+          The fingerprint of the certificate gnome-remote-desktop serves could not
+          be read over D-Bus, so remote_desktop_tls_fingerprint is the fingerprint
+          of {{ __remote_desktop_active_cert }}.
+      when: __served | length == 0
+
+    - name: Set the fingerprint of the served certificate
+      ansible.builtin.set_fact:
+        remote_desktop_tls_fingerprint: "{{ __served if __served | length > 0 else __configured }}"

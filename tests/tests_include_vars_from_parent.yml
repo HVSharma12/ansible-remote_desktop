@@ -4,7 +4,7 @@
   tasks:
     - name: Create var file in caller that can override the one in called role
       delegate_to: localhost
-      copy:
+      ansible.builtin.copy:
         # usually the fake file will cause the called role to crash of
         # overriding happens, but if not, set a variable that will
         # allow to detect the bug
@@ -40,13 +40,14 @@
       register: __varfiles_created
 
     - name: Import role
-      import_role:
+      ansible.builtin.import_role:
         name: caller
       vars:
-        roletoinclude: linux-system-roles.template
+        roletoinclude: linux-system-roles.remote_desktop
+        remote_desktop_enabled: false
 
     - name: Cleanup
-      file:
+      ansible.builtin.file:
         path: "{{ item.dest }}"
         state: absent
       loop: "{{ __varfiles_created.results }}"

@@ -1,26 +1,27 @@
 # SPDX-License-Identifier: MIT
 ---
 galaxy_info:
-  author: John Doe <jdoe@corp.com>
-  description: Basic template for Linux system roles
-  company: John Doe, Inc.
+  namespace: suse
+  role_name: remote_desktop
+  author: Harshvardhan Sharma <harshvardhan.sharma@suse.com>
+  description: Set up GNOME Remote Desktop remote login over RDP
+  company: SUSE
   license: MIT
-  min_ansible_version: "2.9"
+  min_ansible_version: "2.18"
+  # Older ansible-lint schemas lack SLES 16; the role checks the platform.
   platforms:
-    - name: Fedora
+    - name: SLES
       versions:
         - all
-    - name: EL
+    - name: opensuse
       versions:
-        - "9"
+        - all
   galaxy_tags:
-    - el9
-    - el10
-    - fedora
-    # Support running this role in system container environments, and enable
-    # tests. Remove if not applicable.
-    - container
-    # Support running this role during container builds (mostly useful for
-    # bootc), and enable tests. Remove if not applicable.
-    - containerbuild
+    - leap16
+    - sles
+    - sles16
+    - suse
+    - rdp
+    - remotedesktop
+    - gnome
 dependencies: []

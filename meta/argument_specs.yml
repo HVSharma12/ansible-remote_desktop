@@ -2,85 +2,81 @@
 ---
 argument_specs:
   main:
-    short_description: Basic template for Linux system roles
+    short_description: The remote_desktop role.
+    description: >
+      The remote_desktop role turns GNOME Remote Desktop remote login on or
+      off. RDP clients authenticate with one shared user name and password
+      and are then handed over to the GDM login screen.
     options:
-      template_foo:
-        type: str
-        required: false
-        description: >-
-          A string variable for the foo setting.
-
-      template_bar:
+      remote_desktop_enabled:
         type: bool
-        required: false
-        description: >-
-          A boolean variable that enables or disables the bar feature.
-
-      template_baz:
-        type: int
-        required: false
-        description: >-
-          An integer variable for a numeric setting.
-
-      template_config_path:
-        type: path
-        required: false
-        description: >-
-          Filesystem path to the configuration file.
-
-      template_state:
+        default: true
+        description: >
+          Whether remote login is on (`true`) or off (`false`). With `true`
+          and no credentials, the role continues only when remote login is
+          already on, and refuses before any change otherwise. With `false`,
+          the role sets `enabled=false`, clears the stored credentials,
+          removes the copies of a supplied certificate and key, and stops and
+          disables the daemon; packages, GDM and the self-signed certificate
+          are kept.
+      remote_desktop_username:
         type: str
-        required: false
-        choices:
-          - enabled
-          - disabled
-        description: >-
-          Desired state of the template subsystem.  Use choices to
-          restrict a string variable to a fixed set of allowed values.
-
-      template_packages:
-        type: list
-        elements: str
-        required: false
-        description: >-
-          A list of package names.  Use elements to declare the type
-          of each item in the list.
-
-      template_raw_value:
+        default: null
+        description: >
+          The user name RDP clients send. It is an RDP credential, not a
+          system account. Set it together with `remote_desktop_password`;
+          when both are unset or empty, the stored credentials are kept while
+          remote login is on. It may not contain `:`, `\`, control or
+          line-separator characters, may not start with `-`, may not start
+          or end with whitespace, and may not be the string `None`.
+      remote_desktop_password:
+        type: str
+        default: null
+        no_log: true
+        description: >
+          The password RDP clients send, at least 15 characters long. It may
+          not contain control or line-separator characters, the user name or
+          the short host name, and may not start or end with whitespace. It
+          reaches grdctl on standard input only. This value should come from
+          an Ansible vault.
+      remote_desktop_cert:
+        type: str
+        default: null
+        description: >
+          Absolute path of a PEM certificate on the managed host, served
+          instead of the self-signed one. Set it together with
+          `remote_desktop_private_key`. Both must be regular files, not
+          links. The certificate must parse, must not have expired, and must
+          match the key.
+      remote_desktop_private_key:
+        type: str
+        default: null
+        description: >
+          Absolute path of the unencrypted PEM private key of
+          `remote_desktop_cert` on the managed host.
+      remote_desktop_manage_firewall:
+        type: bool
+        default: false
+        description: >
+          Whether to open the `rdp` service (TCP port 3389) in a firewalld
+          that is already installed, enabled and running. With
+          `remote_desktop_enabled: false`, the entry is removed when this role
+          had set up remote login on the host and no other program listens on
+          port 3389. The role never installs, unmasks, enables or starts
+          firewalld.
+      remote_desktop_secure_logging:
+        type: bool
+        default: true
+        description: >
+          Whether to hide the output of the tasks that handle the password or
+          a private key. Set to `false` for debugging only.
+      remote_desktop_transactional_update_reboot_ok:
         type: raw
-        required: false
-        description: >-
-          A variable that accepts values of different types.  Use raw
-          when the variable can be either a string or a list, for
-          example.
-
-      template_services:
-        type: list
-        elements: dict
-        required: false
-        description: >-
-          A list of service configurations.  Each entry is a dictionary
-          with its own set of options.  Use this pattern when the role
-          takes a list of structured items.
-        options:
-          name:
-            type: str
-            required: true
-            description: >-
-              Name of the service.  Mark a sub-option as required when
-              it must always be provided.
-          type:
-            type: str
-            required: false
-            choices:
-              - simple
-              - forking
-              - oneshot
-            description: >-
-              Type of the service.  Choices work inside nested options
-              the same way as at the top level.
-          enabled:
-            type: bool
-            required: false
-            description: >-
-              Whether the service should be enabled at boot.
+        default: null
+        description: >
+          Whether to permit reboots required by transactional updates. Set
+          to `true` to allow reboots, `false` to disallow reboots, or
+          leave unset so that the role will fail to ensure the reboot
+          requirement is not overlooked. Accepts a boolean value or `null`.
+          With `false`, the role stops after the notice, before it configures
+          anything; reboot and run the role again.

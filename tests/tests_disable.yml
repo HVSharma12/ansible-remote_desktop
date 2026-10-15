@@ -1,0 +1,308 @@
+# SPDX-License-Identifier: MIT
+---
+- name: Turn remote login off
+  hosts: all
+  vars:
+    __rd_fx: /root/rdtls
+    __rd_home: /var/lib/gnome-remote-desktop
+    __rd_packages: [patterns-gnome-gnome, gnome-remote-desktop, gnome-console, openssl]
+  tasks:
+    - name: Test turning remote login off
+      block:
+        - name: Generate the test credentials
+          ansible.builtin.include_tasks: tasks/setup_credentials.yml
+
+        - name: Install the RDP client
+          ansible.builtin.include_tasks: tasks/install_rdp_client.yml
+
+        - name: Install, enable and start firewalld
+          ansible.builtin.include_tasks: tasks/setup_firewalld.yml
+
+        - name: Create a fixture pair
+          ansible.builtin.include_tasks: tasks/make_tls_pair.yml
+          vars:
+            __rd_pair: a
+
+        - name: Turn remote login on with the self-signed pair
+          ansible.builtin.include_tasks: tasks/run_role_with_clear_facts.yml
+          vars:
+            remote_desktop_username: "{{ __rd_test_user }}"
+            remote_desktop_password: "{{ __rd_test_pass }}"
+            remote_desktop_manage_firewall: true
+
+        - name: Read the state with the self-signed pair
+          ansible.builtin.include_tasks: tasks/read_state.yml
+
+        - name: Keep the state with the self-signed pair
+          ansible.builtin.set_fact:
+            __rd_selfsigned: "{{ __rd_state }}"
+
+        - name: Turn remote login on with a supplied pair
+          ansible.builtin.include_tasks: tasks/run_role_with_clear_facts.yml
+          vars:
+            remote_desktop_username: "{{ __rd_test_user }}"
+            remote_desktop_password: "{{ __rd_test_pass }}"
+            remote_desktop_cert: "{{ __rd_fx }}/a.crt"
+            remote_desktop_private_key: "{{ __rd_fx }}/a.key"
+            remote_desktop_manage_firewall: true
+
+        - name: Read the state with the supplied pair
+          ansible.builtin.include_tasks: tasks/read_state.yml
+
+        - name: Keep the state with remote login on
+          ansible.builtin.set_fact:
+            __rd_on: "{{ __rd_state }}"
+
+        - name: Read firewalld with remote login on
+          ansible.builtin.include_tasks: tasks/read_firewall.yml
+
+        - name: Assert that remote login is on, with the supplied pair and rdp open
+          ansible.builtin.assert:
+            that:
+              - __rd_on.active == 'active'
+              - __rd_on.fp_supplied == __rd_fx_fp.a
+              - __rd_on.supplied_key_sha256 != 'absent'
+              - __rd_on.fp_self == __rd_selfsigned.fp_self
+              - __rd_fw.rdp_permanent == 'yes'
+              - "'rdp' in __rd_fw.services_runtime.split()"
+            fail_msg: "{{ __rd_on }} {{ __rd_fw }}"
+            quiet: true
+
+        - name: Turn remote login off in check mode
+          ansible.builtin.include_tasks:
+            file: tasks/run_role_with_clear_facts.yml
+            apply:
+              check_mode: true
+          vars:
+            remote_desktop_enabled: false
+            remote_desktop_manage_firewall: true
+
+        - name: Read the state after the check run
+          ansible.builtin.include_tasks: tasks/read_state.yml
+          vars:
+            __rd_since: "{{ __rd_on.now }}"
+
+        - name: Assert that the check run left remote login on
+          ansible.builtin.include_tasks: tasks/assert_unchanged.yml
+          vars:
+            __rd_from: "{{ __rd_on | combine({'starts': '0'}) }}"
+            __rd_to: "{{ __rd_state }}"
+            __rd_keys: [active, enabled, main_pid, starts, store_mtime, conf_sha256, fp_supplied, supplied_key_sha256]
+
+        - name: Assert that the check run left the credentials stored
+          ansible.builtin.assert:
+            that:
+              - "'Username: (hidden)' in __rd_state.status"
+              - "'Password: (hidden)' in __rd_state.status"
+            fail_msg: "Observed: {{ __rd_state.status }}"
+            quiet: true
+
+        - name: Authenticate after the check run
+          ansible.builtin.include_tasks: tasks/check_rdp_auth.yml
+          vars:
+            __rd_auth_user: "{{ __rd_test_user }}"
+            __rd_auth_pass: "{{ __rd_test_pass }}"
+            __rd_auth_expect: ok
+
+        - name: Read firewalld after the check run
+          ansible.builtin.include_tasks: tasks/read_firewall.yml
+
+        - name: Assert that the check run left rdp open
+          ansible.builtin.assert:
+            that:
+              - __rd_fw.rdp_permanent == 'yes'
+              - "'rdp' in __rd_fw.services_runtime.split()"
+            fail_msg: "Observed: {{ __rd_fw }}"
+            quiet: true
+
+        - name: Turn remote login off
+          ansible.builtin.include_tasks: tasks/run_role_with_clear_facts.yml
+          vars:
+            remote_desktop_enabled: false
+            remote_desktop_manage_firewall: true
+
+        - name: Read the state with remote login off
+          ansible.builtin.include_tasks: tasks/read_state.yml
+
+        - name: Keep the state with remote login off
+          ansible.builtin.set_fact:
+            __rd_off: "{{ __rd_state }}"
+
+        - name: Read firewalld with remote login off
+          ansible.builtin.include_tasks: tasks/read_firewall.yml
+
+        - name: Keep firewalld with remote login off
+          ansible.builtin.set_fact:
+            __rd_fw_off: "{{ __rd_fw }}"
+
+        # grdctl 48 prints (empty) for a store without credentials
+        - name: Assert that the daemon is off, the credentials and copies are gone and the self-signed pair is kept
+          ansible.builtin.assert:
+            that:
+              - __rd_off.active == 'inactive'
+              - __rd_off.enabled == 'disabled'
+              - "'Status: disabled' in __rd_off.status"
+              - "'Username: (empty)' in __rd_off.status"
+              - "'Password: (empty)' in __rd_off.status"
+              - __rd_off.fp_supplied == 'absent'
+              - __rd_off.supplied_key_sha256 == 'absent'
+              - __rd_off.fp_self == __rd_selfsigned.fp_self
+              - __rd_fw_off.rdp_permanent == 'no'
+              - "'rdp' not in __rd_fw_off.services_runtime.split()"
+            fail_msg: "{{ __rd_off }} {{ __rd_fw_off }}"
+            quiet: true
+
+        - name: Assert that the packages, GDM and the boot target are kept
+          ansible.builtin.include_tasks: tasks/assert_unchanged.yml
+          vars:
+            __rd_from: "{{ __rd_on }}"
+            __rd_to: "{{ __rd_off }}"
+            __rd_keys: [installed, gdm_active, gdm_enabled, default_target]
+
+        - name: Check that the packages the role installed are still there
+          ansible.builtin.command:  # noqa command-instead-of-module
+            argv: "{{ ['rpm', '-q', '--whatprovides'] + __rd_packages }}"
+          changed_when: false
+
+        - name: Authenticate with remote login off
+          ansible.builtin.include_tasks: tasks/check_rdp_auth.yml
+          vars:
+            __rd_auth_user: "{{ __rd_test_user }}"
+            __rd_auth_pass: "{{ __rd_test_pass }}"
+            __rd_auth_expect: no_listener
+
+        - name: Turn remote login off a second time
+          ansible.builtin.include_tasks: tasks/run_role_with_clear_facts.yml
+          vars:
+            remote_desktop_enabled: false
+            remote_desktop_manage_firewall: true
+
+        - name: Read the state after the second run
+          ansible.builtin.include_tasks: tasks/read_state.yml
+
+        - name: Assert that the second run changed nothing
+          ansible.builtin.include_tasks: tasks/assert_unchanged.yml
+          vars:
+            __rd_from: "{{ __rd_off }}"
+            __rd_to: "{{ __rd_state }}"
+            __rd_keys:
+              - installed
+              - enabled
+              - active
+              - main_pid
+              - conf_sha256
+              - override
+              - fp_self
+              - fp_supplied
+              - store_mtime
+              - status
+              - default_target
+              - gdm_active
+              - gdm_enabled
+
+        - name: Read firewalld after the second run
+          ansible.builtin.include_tasks: tasks/read_firewall.yml
+
+        - name: Assert that the second run left firewalld unchanged
+          ansible.builtin.assert:
+            that:
+              - __rd_fw == __rd_fw_off
+            fail_msg: "Before: {{ __rd_fw_off }} After: {{ __rd_fw }}"
+            quiet: true
+
+        - name: Turn remote login on again without credentials
+          ansible.builtin.include_tasks: tasks/run_role_expect_failure.yml
+
+        - name: Read the state after the run without credentials
+          ansible.builtin.include_tasks: tasks/read_state.yml
+
+        - name: Assert that the run without credentials was refused before any change
+          ansible.builtin.assert:
+            that:
+              - __rd_refused
+              - "'remote_desktop_username' in __rd_refusal"
+              - "'remote_desktop_password' in __rd_refusal"
+            fail_msg: "refused={{ __rd_refused }}, message: {{ __rd_refusal }}"
+            quiet: true
+
+        - name: Assert that the refusal changed nothing
+          ansible.builtin.include_tasks: tasks/assert_unchanged.yml
+          vars:
+            __rd_from: "{{ __rd_off }}"
+            __rd_to: "{{ __rd_state }}"
+            __rd_keys: [enabled, active, main_pid, conf_sha256, status, default_target]
+
+        - name: Store credentials with grdctl, as an administrator would
+          ansible.builtin.command:
+            argv:
+              - runuser
+              - -u
+              - gnome-remote-desktop
+              - --
+              - env
+              - LC_ALL=C
+              - "HOME={{ __rd_home }}"
+              - grdctl
+              - rdp
+              - set-credentials
+              - "{{ __rd_test_user }}"
+            stdin: "{{ __rd_test_pass }}"
+            chdir: "{{ __rd_home }}"
+          changed_when: true
+          failed_when: false
+          no_log: true
+
+        - name: Turn remote login off with grdctl, which keeps the stored credentials
+          ansible.builtin.command:
+            argv:
+              - grdctl
+              - --system
+              - rdp
+              - disable
+          environment:
+            LC_ALL: C
+          changed_when: true
+          failed_when: false
+
+        - name: Read the state of the host turned off with grdctl
+          ansible.builtin.include_tasks: tasks/read_state.yml
+
+        - name: Keep the state of the host turned off with grdctl
+          ansible.builtin.set_fact:
+            __rd_grdctl_off: "{{ __rd_state }}"
+
+        - name: Assert that grdctl stored the credentials and remote login is off
+          ansible.builtin.assert:
+            that:
+              - "'Status: disabled' in __rd_grdctl_off.status"
+              - "'Username: (hidden)' in __rd_grdctl_off.status"
+              - "'Password: (hidden)' in __rd_grdctl_off.status"
+              - __rd_grdctl_off.active == 'inactive'
+            fail_msg: "Observed: {{ __rd_grdctl_off }}"
+            quiet: true
+
+        - name: Run the role with default parameters
+          ansible.builtin.include_tasks: tasks/run_role_expect_failure.yml
+
+        - name: Read the state after the run with default parameters
+          ansible.builtin.include_tasks: tasks/read_state.yml
+
+        - name: Assert that default parameters do not turn remote login on again
+          ansible.builtin.assert:
+            that:
+              - __rd_refused
+              - "'remote_desktop_username' in __rd_refusal"
+              - "'remote_desktop_password' in __rd_refusal"
+            fail_msg: "refused={{ __rd_refused }}, message: {{ __rd_refusal }}"
+            quiet: true
+
+        - name: Assert that nothing started and nothing changed
+          ansible.builtin.include_tasks: tasks/assert_unchanged.yml
+          vars:
+            __rd_from: "{{ __rd_grdctl_off }}"
+            __rd_to: "{{ __rd_state }}"
+            __rd_keys: [enabled, active, main_pid, listener_pids, conf_sha256, store_mtime, default_target]
+      always:
+        - name: Clean up
+          ansible.builtin.include_tasks: tasks/cleanup.yml
+          tags: tests::cleanup

@@ -1,0 +1,72 @@
+# SPDX-License-Identifier: MIT
+---
+- name: Ensure that check mode installs and changes nothing on a host without gnome-remote-desktop
+  hosts: all
+  tasks:
+    - name: Read whether gnome-remote-desktop is installed
+      ansible.builtin.command:
+        argv:
+          - rpm
+          - -q
+          - gnome-remote-desktop
+      register: __rd_rpm_before
+      changed_when: false
+      failed_when: false
+
+    - name: Report that the check-mode leg is skipped
+      ansible.builtin.debug:
+        msg: gnome-remote-desktop is already installed, so this host cannot show that check mode installs nothing
+      when: __rd_rpm_before.rc == 0
+
+    - name: Run the role in check mode on a host without gnome-remote-desktop
+      when: __rd_rpm_before.rc != 0
+      block:
+        - name: Generate the test credentials
+          ansible.builtin.include_tasks: tasks/setup_credentials.yml
+
+        - name: Read the state before the run
+          ansible.builtin.include_tasks: tasks/read_state.yml
+
+        - name: Keep the state before the run
+          ansible.builtin.set_fact:
+            __rd_before: "{{ __rd_state }}"
+
+        - name: Run the role in check mode
+          ansible.builtin.include_tasks:
+            file: tasks/run_role_with_clear_facts.yml
+            apply:
+              check_mode: true
+          vars:
+            remote_desktop_username: "{{ __rd_test_user }}"
+            remote_desktop_password: "{{ __rd_test_pass }}"
+
+        - name: Read whether gnome-remote-desktop is installed after the run
+          ansible.builtin.command:
+            argv:
+              - rpm
+              - -q
+              - gnome-remote-desktop
+          register: __rd_rpm_after
+          changed_when: false
+          failed_when: false
+
+        - name: Assert that the check run installed nothing
+          ansible.builtin.assert:
+            that:
+              - __rd_rpm_after.rc != 0
+            fail_msg: "gnome-remote-desktop was installed: {{ __rd_rpm_after.stdout }}"
+            quiet: true
+
+        - name: Read the state after the run
+          ansible.builtin.include_tasks: tasks/read_state.yml
+
+        - name: Assert that the check run changed nothing
+          ansible.builtin.include_tasks: tasks/assert_unchanged.yml
+          vars:
+            __rd_from: "{{ __rd_before }}"
+            __rd_to: "{{ __rd_state }}"
+            __rd_keys: [installed, enabled, active, conf_sha256, default_target]
+      always:
+        - name: Clean up
+          ansible.builtin.include_tasks: tasks/cleanup.yml
+          tags: tests::cleanup

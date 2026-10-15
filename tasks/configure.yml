@@ -1,0 +1,65 @@
+# SPDX-License-Identifier: MIT
+---
+- name: Ensure GDM is enabled
+  ansible.builtin.systemd_service:
+    name: "{{ __remote_desktop_dm_service }}"
+    enabled: true
+
+# The daemon reaches the login screen only through a GDM that started before it
+- name: Ensure GDM is started
+  ansible.builtin.systemd_service:
+    name: "{{ __remote_desktop_dm_service }}"
+    state: started
+  when: __remote_desktop_is_booted | bool
+  notify: Restart gnome-remote-desktop
+
+- name: Read the default boot target
+  ansible.builtin.command:
+    cmd: systemctl get-default
+  register: __remote_desktop_default_target
+  changed_when:
+    - __remote_desktop_check_mode | bool
+    - __remote_desktop_default_target.stdout != 'graphical.target'
+  check_mode: false
+
+- name: Make graphical.target the default boot target
+  ansible.builtin.command:
+    cmd: systemctl set-default graphical.target
+  when: __remote_desktop_default_target.stdout != 'graphical.target'
+  changed_when: true
+
+- name: Ensure the TLS certificate and key
+  ansible.builtin.include_tasks: tls.yml
+
+- name: Generate {{ __remote_desktop_conf }}
+  ansible.builtin.include_tasks: write_conf.yml
+
+- name: Read whether the GNOME Settings override exists
+  ansible.builtin.stat:
+    path: "{{ __remote_desktop_override_conf }}"
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: __remote_desktop_override_stat
+  changed_when: __remote_desktop_check_mode | bool and __remote_desktop_override_stat.stat.exists
+  notify: Restart gnome-remote-desktop
+
+- name: Remove the GNOME Settings override as the service account
+  ansible.builtin.command:
+    argv: "{{ __remote_desktop_runuser + ['rm', '-f', '--', __remote_desktop_override_conf] }}"
+    chdir: "{{ __remote_desktop_home }}"
+  when: __remote_desktop_override_stat.stat.exists
+  changed_when: true
+  notify: Restart gnome-remote-desktop
+
+- name: Ensure the RDP credentials
+  ansible.builtin.include_tasks: credentials.yml
+  when: remote_desktop_password | d('', true) | length > 0
+
+- name: Report that the stored RDP credentials are kept
+  ansible.builtin.debug:
+    msg: >-
+      remote_desktop_username and remote_desktop_password are not set, so the
+      stored RDP credentials are kept.
+  when: remote_desktop_password | d('', true) | length == 0

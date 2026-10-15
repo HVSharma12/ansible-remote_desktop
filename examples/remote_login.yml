@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: MIT
+---
+# Turn on GNOME Remote Desktop remote login on this host. Run it on the host
+# itself:  sudo ansible-playbook -c local -i localhost, <path of this file>
+# It asks for the user name and password that RDP clients must send. Give them
+# at the prompts or in a vars file: values passed as -e name=value appear in
+# the process list and in sudo's log.
+- name: Set up remote login over RDP
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: false
+  vars_prompt:
+    - name: remote_desktop_username
+      prompt: RDP user name (empty keeps the current one)
+      private: false
+      unsafe: true
+    - name: remote_desktop_password
+      prompt: RDP password, 15 or more characters (empty keeps the current one)
+      private: true
+      confirm: true
+      unsafe: true
+  vars:
+    ansible_pipelining: true
+    remote_desktop_manage_firewall: true
+  roles:
+    - role: suse.linux_system_roles.remote_desktop
+  post_tasks:
+    # The role sets the fingerprint only after it has verified the listener
+    - name: Show where to connect
+      ansible.builtin.debug:
+        msg: >-
+          Remote login listens on TCP port 3389 of {{ ansible_facts['fqdn'] }}.
+          Certificate SHA-256 fingerprint: {{ remote_desktop_tls_fingerprint }}
+      when: remote_desktop_tls_fingerprint | d('') | length > 0

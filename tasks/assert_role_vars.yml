@@ -1,0 +1,99 @@
+# SPDX-License-Identifier: MIT
+---
+- name: Assert the host is a supported platform
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['distribution'] in __remote_desktop_supported_distributions
+      - ansible_facts['distribution_major_version'] == __remote_desktop_supported_major_version
+      - __remote_desktop_variant_id not in __remote_desktop_refused_variant_ids
+    fail_msg: >-
+      This role supports SLES 16 and openSUSE Leap 16, but not their
+      transactional variants such as SLES 16.1 Immutable. This host is
+      {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}{{
+      ' (VARIANT_ID ' ~ __remote_desktop_variant_id ~ ')'
+      if __remote_desktop_variant_id | length > 0 else '' }}.
+    quiet: true
+
+- name: Assert remote_desktop_transactional_update_reboot_ok is null or a boolean
+  ansible.builtin.assert:
+    that:
+      - >-
+        (remote_desktop_transactional_update_reboot_ok is none)
+        or (remote_desktop_transactional_update_reboot_ok is sameas true)
+        or (remote_desktop_transactional_update_reboot_ok is sameas false)
+    fail_msg: >-
+      remote_desktop_transactional_update_reboot_ok must be null or a boolean,
+      got {{ remote_desktop_transactional_update_reboot_ok | type_debug }}
+
+- name: Validate the credentials and the certificate
+  when: remote_desktop_enabled | bool
+  vars:
+    __user: "{{ remote_desktop_username | d('', true) | string }}"
+    __password: "{{ remote_desktop_password | d('', true) | string }}"
+    __cert: "{{ remote_desktop_cert | d('', true) | string }}"
+    __key: "{{ remote_desktop_private_key | d('', true) | string }}"
+  block:
+    - name: Assert remote_desktop_username and remote_desktop_password are set together
+      ansible.builtin.assert:
+        that:
+          - (__user | length > 0) == (__password | length > 0)
+        fail_msg: >-
+          Set remote_desktop_username and remote_desktop_password together, or
+          neither of them.
+        quiet: true
+
+    # grdctl would parse a user name that starts with '-' as one of its options
+    - name: Assert remote_desktop_username is valid
+      ansible.builtin.assert:
+        that:
+          - __user is not search(__remote_desktop_bad_chars_pattern)
+          - __user == __user | trim
+          - __user is not search(__remote_desktop_username_forbidden_pattern)
+          - __user is not match('-')
+          - __user != 'None'
+        fail_msg: >-
+          remote_desktop_username may not contain control or line-separator
+          characters, ':' or '\', may not start with '-', may not start or end
+          with whitespace, and may not be the string 'None'.
+        quiet: true
+      when: __user | length > 0
+
+    - name: Check remote_desktop_password against the password rules
+      ansible.builtin.set_fact:
+        __remote_desktop_password_problems: "{{ __problems | select | list }}"
+      vars:
+        __host: "{{ ansible_facts['hostname'] | lower }}"
+        __min: "{{ __remote_desktop_context_name_min_length | int }}"
+        __problems:
+          - "{{ 'it has fewer than ' ~ __remote_desktop_password_min_length ~ ' characters'
+            if __password | length < __remote_desktop_password_min_length | int else '' }}"
+          - "{{ 'it contains a control or line-separator character'
+            if __password is search(__remote_desktop_bad_chars_pattern) else '' }}"
+          - "{{ 'it starts or ends with whitespace' if __password != __password | trim else '' }}"
+          - "{{ 'it contains remote_desktop_username'
+            if __user | length >= __min | int and __user | lower in __password | lower else '' }}"
+          - "{{ 'it contains the host name'
+            if __host | length >= __min | int and __host in __password | lower else '' }}"
+      no_log: "{{ remote_desktop_secure_logging }}"
+      when: __password | length > 0
+
+    - name: Assert remote_desktop_password is valid
+      ansible.builtin.assert:
+        that:
+          - __remote_desktop_password_problems | length == 0
+        fail_msg: >-
+          remote_desktop_password is refused:
+          {{ __remote_desktop_password_problems | join('; ') }}.
+        quiet: true
+      when: __password | length > 0
+
+    - name: Assert remote_desktop_cert and remote_desktop_private_key are absolute paths set together
+      ansible.builtin.assert:
+        that:
+          - (__cert | length > 0) == (__key | length > 0)
+          - __cert | length == 0 or __cert is abs
+          - __key | length == 0 or __key is abs
+        fail_msg: >-
+          Set remote_desktop_cert and remote_desktop_private_key together, as
+          absolute paths on the managed host, or neither of them.
+        quiet: true

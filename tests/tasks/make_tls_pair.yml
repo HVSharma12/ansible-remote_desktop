@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: MIT
+---
+# Input: __rd_fx (root-only directory), __rd_pair (file name), __rd_pair_encrypted; adds a fingerprint to __rd_fx_fp
+- name: Create the root-only fixture directory
+  ansible.builtin.file:
+    path: "{{ __rd_fx }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Create the fixture certificate and key {{ __rd_pair }}
+  ansible.builtin.command:
+    argv: "{{ __rd_req + (['-passout', 'env:RD_FX_PASS'] if __rd_pair_encrypted | d(false) else ['-nodes']) }}"
+    creates: "{{ __rd_fx }}/{{ __rd_pair }}.crt"
+  environment:
+    RD_FX_PASS: "{{ lookup('ansible.builtin.password', '/dev/null', chars=['ascii_letters', 'digits'], length=24) }}"
+  vars:
+    __rd_req:
+      - openssl
+      - req
+      - -x509
+      - -newkey
+      - rsa:2048
+      - -days
+      - "365"
+      - -subj
+      - "/CN=rdtest-{{ __rd_pair }}"
+      - -keyout
+      - "{{ __rd_fx }}/{{ __rd_pair }}.key"
+      - -out
+      - "{{ __rd_fx }}/{{ __rd_pair }}.crt"
+
+- name: Read the fingerprint of the fixture certificate {{ __rd_pair }}
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - x509
+      - -noout
+      - -fingerprint
+      - -sha256
+      - -in
+      - "{{ __rd_fx }}/{{ __rd_pair }}.crt"
+  register: __rd_fx_fp_raw
+  changed_when: false
+
+- name: Keep the fingerprint of the fixture certificate
+  ansible.builtin.set_fact:
+    __rd_fx_fp: >-
+      {{ __rd_fx_fp | d({}) | combine({__rd_pair: __rd_fx_fp_raw.stdout
+      | regex_replace('^.*=', '') | replace(':', '') | lower}) }}

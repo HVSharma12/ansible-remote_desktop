@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: MIT
+---
+# A firewalld fixture: installed, enabled and running; cleanup.yml removes it again
+- name: Read the firewalld state before the fixture
+  ansible.builtin.include_tasks: read_firewall.yml
+
+- name: Require a host without firewalld, so that the cleanup can remove the fixture
+  ansible.builtin.assert:
+    that:
+      - __rd_fw.installed == 'no'
+    fail_msg: >-
+      firewalld is already installed on this host; this test installs it as a
+      fixture and removes it afterwards
+    quiet: true
+
+- name: Record that this test installs firewalld
+  ansible.builtin.set_fact:
+    __rd_fw_installed_by_test: true
+
+- name: Install firewalld
+  ansible.builtin.package:
+    name: firewalld
+    state: present
+  register: __rd_fw_install
+  until: __rd_fw_install is success
+  retries: 3
+  delay: 10
+
+- name: Enable and start firewalld
+  ansible.builtin.systemd_service:
+    name: firewalld.service
+    enabled: true
+    state: started
+
+- name: Read the default zone
+  ansible.builtin.command:
+    argv:
+      - firewall-cmd
+      - --get-default-zone
+  register: __rd_fw_zone_raw
+  changed_when: false
+
+- name: Keep the default zone
+  ansible.builtin.set_fact:
+    __rd_fw_zone: "{{ __rd_fw_zone_raw.stdout | trim }}"

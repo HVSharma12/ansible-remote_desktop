@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: MIT
 ---
-- name: Handler for template to restart services
-  service:
-    name: "{{ item }}"
+- name: Restart gnome-remote-desktop
+  ansible.builtin.systemd_service:
+    name: "{{ __remote_desktop_service }}"
     state: restarted
-  loop: "{{ __template_services }}"
+  when:
+    - __remote_desktop_is_booted | bool
+    - remote_desktop_enabled | bool

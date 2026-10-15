@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: MIT
+---
+- name: Ensure {{ __remote_desktop_conf }}
+  vars:
+    __differs: "{{ 'same' not in (__remote_desktop_conf_cmp.stdout | d(''))
+      or __remote_desktop_conf_stat.stat.mode | d('') != '0644'
+      or __remote_desktop_conf_stat.stat.pw_name | d('') != __remote_desktop_user }}"
+  block:
+    - name: Read the owner and mode of {{ __remote_desktop_conf }}
+      ansible.builtin.stat:
+        path: "{{ __remote_desktop_conf }}"
+        follow: false
+        get_checksum: false
+        get_mime: false
+        get_attributes: false
+      register: __remote_desktop_conf_stat
+
+    # The same stdin bytes as the write, so the comparison cannot drift from what is written
+    - name: Compare as the service account the rendered content with {{ __remote_desktop_conf }}
+      ansible.builtin.command:
+        argv: "{{ __remote_desktop_runuser
+          + ['sh', '-c', 'if cmp -s - \"$1\"; then echo same; else echo differs; fi', 'sh',
+             __remote_desktop_conf] }}"
+        stdin: "{{ __remote_desktop_conf_content }}"
+        chdir: "{{ __remote_desktop_home }}"
+      register: __remote_desktop_conf_cmp
+      changed_when: __remote_desktop_check_mode | bool and __differs | bool
+      failed_when: false
+      check_mode: false
+      notify: Restart gnome-remote-desktop
+
+    # The directory belongs to the account, so root renders the file and the account writes it
+    - name: Write as the service account {{ __remote_desktop_conf }}
+      ansible.builtin.command:
+        argv: "{{ __remote_desktop_runuser
+          + ['sh', '-c', __remote_desktop_conf_write, 'sh', __remote_desktop_conf] }}"
+        stdin: "{{ __remote_desktop_conf_content }}"
+        chdir: "{{ __remote_desktop_home }}"
+      when: __differs | bool
+      changed_when: true
+      notify: Restart gnome-remote-desktop

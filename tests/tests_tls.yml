@@ -1,0 +1,302 @@
+# SPDX-License-Identifier: MIT
+---
+- name: Serve a supplied certificate, rotate it, refuse bad pairs and renew the self-signed one
+  hosts: all
+  vars:
+    __rd_fx: /root/rdtls
+    __rd_home: /var/lib/gnome-remote-desktop
+    __rd_data: "{{ __rd_home }}/.local/share/gnome-remote-desktop"
+  tasks:
+    - name: Test TLS
+      block:
+        - name: Generate the test credentials
+          ansible.builtin.include_tasks: tasks/setup_credentials.yml
+
+        - name: Install the RDP client
+          ansible.builtin.include_tasks: tasks/install_rdp_client.yml
+
+        - name: Create the fixture pairs
+          ansible.builtin.include_tasks: tasks/make_tls_pair.yml
+          vars:
+            __rd_pair: "{{ item.name }}"
+            __rd_pair_encrypted: "{{ item.encrypted }}"
+          loop:
+            - {name: a, encrypted: false}
+            - {name: b, encrypted: false}
+            - {name: c, encrypted: true}
+
+        - name: Turn remote login on with the self-signed pair
+          ansible.builtin.include_tasks: tasks/run_role_with_clear_facts.yml
+          vars:
+            remote_desktop_username: "{{ __rd_test_user }}"
+            remote_desktop_password: "{{ __rd_test_pass }}"
+
+        - name: Read the state with the self-signed pair
+          ansible.builtin.include_tasks: tasks/read_state.yml
+
+        - name: Keep the state with the self-signed pair
+          ansible.builtin.set_fact:
+            __rd_selfsigned: "{{ __rd_state }}"
+
+        - name: Assert that the self-signed pair is served
+          ansible.builtin.assert:
+            that:
+              - __rd_selfsigned.fp_self != 'absent'
+              - __rd_selfsigned.fp_conf == __rd_selfsigned.fp_self
+              - __rd_selfsigned.fp_conf == remote_desktop_tls_fingerprint | lower | replace(':', '')
+            fail_msg: "Observed: {{ __rd_selfsigned }}"
+            quiet: true
+
+        - name: Supply pair a
+          ansible.builtin.include_tasks: tasks/run_role_with_clear_facts.yml
+          vars:
+            remote_desktop_username: "{{ __rd_test_user }}"
+            remote_desktop_password: "{{ __rd_test_pass }}"
+            remote_desktop_cert: "{{ __rd_fx }}/a.crt"
+            remote_desktop_private_key: "{{ __rd_fx }}/a.key"
+
+        - name: Read the state with pair a
+          ansible.builtin.include_tasks: tasks/read_state.yml
+          vars:
+            __rd_since: "{{ __rd_selfsigned.now }}"
+
+        - name: Keep the state with pair a
+          ansible.builtin.set_fact:
+            __rd_pair_a: "{{ __rd_state }}"
+
+        - name: Read the owners and modes of the copies
+          ansible.builtin.stat:
+            path: "{{ __rd_data }}/{{ item }}"
+            follow: false
+            get_checksum: false
+          loop:
+            - tls-supplied.crt
+            - tls-supplied.key
+          register: __rd_copies
+
+        - name: Assert that pair a is served from copies only the account can read
+          ansible.builtin.assert:
+            that:
+              - __rd_pair_a.fp_supplied == __rd_fx_fp.a
+              - __rd_pair_a.fp_conf == __rd_fx_fp.a
+              - __rd_pair_a.status_fp == __rd_fx_fp.a
+              - remote_desktop_tls_fingerprint | lower | replace(':', '') == __rd_fx_fp.a
+              - __rd_pair_a.main_pid != __rd_selfsigned.main_pid
+              - __rd_pair_a.starts == '1'
+              - __rd_copies.results | map(attribute='stat.pw_name') | unique | list == ['gnome-remote-desktop']
+              - __rd_copies.results | map(attribute='stat.mode') | unique | list == ['0600']
+            fail_msg: "{{ __rd_pair_a }}, copies {{ __rd_copies.results | map(attribute='stat') | list }}"
+            quiet: true
+
+        - name: Authenticate with pair a served
+          ansible.builtin.include_tasks: tasks/check_rdp_auth.yml
+          vars:
+            __rd_auth_user: "{{ __rd_test_user }}"
+            __rd_auth_pass: "{{ __rd_test_pass }}"
+            __rd_auth_expect: ok
+
+        - name: Rotate to pair b
+          ansible.builtin.include_tasks: tasks/run_role_with_clear_facts.yml
+          vars:
+            remote_desktop_username: "{{ __rd_test_user }}"
+            remote_desktop_password: "{{ __rd_test_pass }}"
+            remote_desktop_cert: "{{ __rd_fx }}/b.crt"
+            remote_desktop_private_key: "{{ __rd_fx }}/b.key"
+
+        - name: Read the state with pair b
+          ansible.builtin.include_tasks: tasks/read_state.yml
+          vars:
+            __rd_since: "{{ __rd_pair_a.now }}"
+
+        - name: Keep the state with pair b
+          ansible.builtin.set_fact:
+            __rd_pair_b: "{{ __rd_state }}"
+
+        - name: Assert that pair b is served after one restart
+          ansible.builtin.assert:
+            that:
+              - __rd_fx_fp.b != __rd_fx_fp.a
+              - __rd_pair_b.fp_conf == __rd_fx_fp.b
+              - __rd_pair_b.status_fp == __rd_fx_fp.b
+              - remote_desktop_tls_fingerprint | lower | replace(':', '') == __rd_fx_fp.b
+              - __rd_pair_b.main_pid != __rd_pair_a.main_pid
+              - __rd_pair_b.starts == '1'
+            fail_msg: "Observed: {{ __rd_pair_b }}"
+            quiet: true
+
+        - name: Refuse a certificate with the key of another pair
+          ansible.builtin.include_tasks: tasks/run_role_expect_failure.yml
+          vars:
+            remote_desktop_username: "{{ __rd_test_user }}"
+            remote_desktop_password: "{{ __rd_test_pass }}"
+            remote_desktop_cert: "{{ __rd_fx }}/a.crt"
+            remote_desktop_private_key: "{{ __rd_fx }}/b.key"
+
+        - name: Read the state after the mismatched pair
+          ansible.builtin.include_tasks: tasks/read_state.yml
+
+        - name: Assert that the mismatched pair was refused before any change
+          ansible.builtin.assert:
+            that:
+              - __rd_refused
+              - "'remote_desktop_cert' in __rd_refusal or 'remote_desktop_private_key' in __rd_refusal"
+            fail_msg: "refused={{ __rd_refused }}, message: {{ __rd_refusal }}"
+            quiet: true
+
+        - name: Assert that the mismatched pair changed nothing
+          ansible.builtin.include_tasks: tasks/assert_unchanged.yml
+          vars:
+            __rd_from: "{{ __rd_pair_b }}"
+            __rd_to: "{{ __rd_state }}"
+            __rd_keys: [main_pid, conf_sha256, fp_conf, fp_supplied, supplied_key_sha256]
+
+        - name: Refuse an encrypted key
+          ansible.builtin.include_tasks: tasks/run_role_expect_failure.yml
+          vars:
+            remote_desktop_username: "{{ __rd_test_user }}"
+            remote_desktop_password: "{{ __rd_test_pass }}"
+            remote_desktop_cert: "{{ __rd_fx }}/c.crt"
+            remote_desktop_private_key: "{{ __rd_fx }}/c.key"
+
+        - name: Read the state after the encrypted key
+          ansible.builtin.include_tasks: tasks/read_state.yml
+
+        - name: Assert that the encrypted key was refused before any change
+          ansible.builtin.assert:
+            that:
+              - __rd_refused
+              - "'remote_desktop_private_key' in __rd_refusal"
+            fail_msg: "refused={{ __rd_refused }}, message: {{ __rd_refusal }}"
+            quiet: true
+
+        - name: Assert that the encrypted key changed nothing
+          ansible.builtin.include_tasks: tasks/assert_unchanged.yml
+          vars:
+            __rd_from: "{{ __rd_pair_b }}"
+            __rd_to: "{{ __rd_state }}"
+            __rd_keys: [main_pid, conf_sha256, fp_conf, fp_supplied, supplied_key_sha256]
+
+        - name: Unset the supplied pair
+          ansible.builtin.include_tasks: tasks/run_role_with_clear_facts.yml
+          vars:
+            remote_desktop_username: "{{ __rd_test_user }}"
+            remote_desktop_password: "{{ __rd_test_pass }}"
+
+        - name: Read the state without a supplied pair
+          ansible.builtin.include_tasks: tasks/read_state.yml
+
+        - name: Assert that the copies are gone and the earlier self-signed pair is served again
+          ansible.builtin.assert:
+            that:
+              - __rd_state.fp_supplied == 'absent'
+              - __rd_state.supplied_key_sha256 == 'absent'
+              - __rd_state.fp_self == __rd_selfsigned.fp_self
+              - __rd_state.fp_conf == __rd_selfsigned.fp_self
+              - __rd_state.status_fp == __rd_selfsigned.fp_self
+              - remote_desktop_tls_fingerprint | lower | replace(':', '') == __rd_selfsigned.fp_self
+            fail_msg: "Observed: {{ __rd_state }}"
+            quiet: true
+
+        - name: Replace the self-signed pair with one that expires within 30 days, as the account
+          ansible.builtin.command:
+            argv:
+              - runuser
+              - -u
+              - gnome-remote-desktop
+              - --
+              - env
+              - LC_ALL=C
+              - "HOME={{ __rd_home }}"
+              - openssl
+              - req
+              - -x509
+              - -newkey
+              - rsa:2048
+              - -nodes
+              - -days
+              - "10"
+              - -subj
+              - /CN=rdtest-expiring
+              - -keyout
+              - "{{ __rd_data }}/tls.key"
+              - -out
+              - "{{ __rd_data }}/tls.crt"
+            chdir: "{{ __rd_home }}"
+          changed_when: true
+
+        - name: Read the state with the expiring pair
+          ansible.builtin.include_tasks: tasks/read_state.yml
+
+        - name: Keep the state with the expiring pair
+          ansible.builtin.set_fact:
+            __rd_expiring: "{{ __rd_state }}"
+
+        - name: Run the role with the expiring pair
+          ansible.builtin.include_tasks: tasks/run_role_with_clear_facts.yml
+          vars:
+            remote_desktop_username: "{{ __rd_test_user }}"
+            remote_desktop_password: "{{ __rd_test_pass }}"
+
+        - name: Read the state after the renewal
+          ansible.builtin.include_tasks: tasks/read_state.yml
+          vars:
+            __rd_since: "{{ __rd_expiring.now }}"
+
+        - name: Keep the state after the renewal
+          ansible.builtin.set_fact:
+            __rd_renewed: "{{ __rd_state }}"
+
+        - name: Check that the renewed certificate is valid for more than 30 days
+          ansible.builtin.command:
+            argv:
+              - openssl
+              - x509
+              - -noout
+              - -checkend
+              - "2592000"
+              - -in
+              - "{{ __rd_data }}/tls.crt"
+          register: __rd_checkend
+          changed_when: false
+          failed_when: false
+
+        - name: Assert that the expiring pair was replaced and is served
+          ansible.builtin.assert:
+            that:
+              - __rd_expiring.fp_self != __rd_selfsigned.fp_self
+              - __rd_renewed.fp_self != __rd_expiring.fp_self
+              - __rd_checkend.rc == 0
+              - __rd_renewed.fp_conf == __rd_renewed.fp_self
+              - remote_desktop_tls_fingerprint | lower | replace(':', '') == __rd_renewed.fp_self
+              - __rd_renewed.starts == '1'
+            fail_msg: "Expiring: {{ __rd_expiring }} Renewed: {{ __rd_renewed }}, checkend rc {{ __rd_checkend.rc }}"
+            quiet: true
+
+        - name: Run the role a second time after the renewal
+          ansible.builtin.include_tasks: tasks/run_role_with_clear_facts.yml
+          vars:
+            remote_desktop_username: "{{ __rd_test_user }}"
+            remote_desktop_password: "{{ __rd_test_pass }}"
+
+        - name: Read the state after the second run
+          ansible.builtin.include_tasks: tasks/read_state.yml
+          vars:
+            __rd_since: "{{ __rd_renewed.now }}"
+
+        - name: Assert that the second run changed nothing
+          ansible.builtin.include_tasks: tasks/assert_unchanged.yml
+          vars:
+            __rd_from: "{{ __rd_renewed | combine({'starts': '0'}) }}"
+            __rd_to: "{{ __rd_state }}"
+            __rd_keys: [main_pid, starts, conf_sha256, fp_conf, fp_self, store_mtime]
+
+        - name: Authenticate after the second run
+          ansible.builtin.include_tasks: tasks/check_rdp_auth.yml
+          vars:
+            __rd_auth_user: "{{ __rd_test_user }}"
+            __rd_auth_pass: "{{ __rd_test_pass }}"
+            __rd_auth_expect: ok
+      always:
+        - name: Clean up
+          ansible.builtin.include_tasks: tasks/cleanup.yml
+          tags: tests::cleanup

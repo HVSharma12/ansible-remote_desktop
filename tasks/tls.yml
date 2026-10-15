@@ -1,0 +1,184 @@
+# SPDX-License-Identifier: MIT
+---
+# Root only reads in the account's home; writes run as the account, so a planted link gains nothing
+- name: Read the data directories of the service account
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  loop: "{{ __remote_desktop_dirs }}"
+  register: __remote_desktop_dirs_stat
+  changed_when: __remote_desktop_check_mode | bool and __remote_desktop_dirs_stat.stat.mode | d('') != '0700'
+
+- name: Create the data directories as the service account
+  ansible.builtin.command:
+    argv: "{{ __remote_desktop_runuser + ['install', '-d', '-m', '0700'] + __remote_desktop_dirs }}"
+    chdir: "{{ __remote_desktop_home }}"
+  when: __remote_desktop_dirs_stat.results | map(attribute='stat.mode', default='')
+    | reject('eq', '0700') | list | length > 0
+  changed_when: true
+
+- name: Ensure the self-signed certificate and key
+  when: not __remote_desktop_supplied | bool
+  vars:
+    __regenerate: "{{ __remote_desktop_selfsigned_cert_read.rc | d(1) != 0
+      or __remote_desktop_selfsigned_key_read.rc | d(1) != 0
+      or __remote_desktop_selfsigned_key_read.stdout
+      not in __remote_desktop_selfsigned_cert_read.stdout }}"
+  block:
+    - name: Read the self-signed certificate as the service account
+      ansible.builtin.command:
+        argv: "{{ __remote_desktop_runuser + ['openssl', 'x509', '-noout', '-pubkey',
+          '-in', __remote_desktop_selfsigned_cert, '-checkend', __remote_desktop_renew_seconds] }}"
+        chdir: "{{ __remote_desktop_home }}"
+      register: __remote_desktop_selfsigned_cert_read
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Read the public key of the self-signed key as the service account
+      ansible.builtin.command:
+        argv: "{{ __remote_desktop_runuser
+          + ['openssl', 'pkey', '-pubout', '-in', __remote_desktop_selfsigned_key] }}"
+        chdir: "{{ __remote_desktop_home }}"
+      register: __remote_desktop_selfsigned_key_read
+      changed_when: __remote_desktop_check_mode | bool and __regenerate | bool
+      failed_when: false
+      check_mode: false
+      no_log: "{{ remote_desktop_secure_logging }}"
+      notify: Restart gnome-remote-desktop
+
+    - name: Generate the self-signed certificate and key as the service account
+      ansible.builtin.command:
+        argv: "{{ __remote_desktop_runuser + __openssl_req }}"
+        chdir: "{{ __remote_desktop_home }}"
+      vars:
+        __openssl_req:
+          - openssl
+          - req
+          - -x509
+          - -newkey
+          - "{{ __remote_desktop_key_spec }}"
+          - -nodes
+          - -days
+          - "{{ __remote_desktop_selfsigned_days }}"
+          - -subj
+          - "/CN={{ ansible_facts['hostname'][: __remote_desktop_cn_max | int] }}"
+          - -addext
+          - "subjectAltName={{ [ansible_facts['fqdn'], ansible_facts['hostname']] | unique
+            | map('regex_replace', '^', 'DNS:') | join(',') }}"
+          - -keyout
+          - "{{ __remote_desktop_selfsigned_key }}"
+          - -out
+          - "{{ __remote_desktop_selfsigned_cert }}"
+      when: __regenerate | bool
+      changed_when: true
+      notify: Restart gnome-remote-desktop
+
+    - name: Read whether copies of a supplied certificate and key remain
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+        get_checksum: false
+        get_mime: false
+        get_attributes: false
+      loop:
+        - "{{ __remote_desktop_supplied_cert }}"
+        - "{{ __remote_desktop_supplied_key }}"
+      register: __remote_desktop_leftover_stat
+      changed_when: __remote_desktop_check_mode | bool and __remote_desktop_leftover_stat.stat.exists
+
+    - name: Remove the copies as the service account
+      ansible.builtin.command:
+        argv: "{{ __remote_desktop_runuser + ['rm', '-f', '--'] + __paths }}"
+        chdir: "{{ __remote_desktop_home }}"
+      vars:
+        __paths: "{{ __remote_desktop_leftover_stat.results | selectattr('stat.exists')
+          | map(attribute='item') | list }}"
+      when: __paths | length > 0
+      changed_when: true
+
+- name: Ensure the copies of the supplied certificate and key
+  when: __remote_desktop_supplied | bool
+  vars:
+    __remote_desktop_pairs:
+      - src: "{{ remote_desktop_cert }}"
+        dest: "{{ __remote_desktop_supplied_cert }}"
+      - src: "{{ remote_desktop_private_key }}"
+        dest: "{{ __remote_desktop_supplied_key }}"
+  block:
+    - name: Read the checksums of the supplied certificate and key
+      ansible.builtin.stat:
+        path: "{{ item.src }}"
+        follow: false
+        checksum_algorithm: sha256
+      loop: "{{ __remote_desktop_pairs }}"
+      loop_control:
+        label: "{{ item.src }}"
+      register: __remote_desktop_source_stat
+
+    - name: Read the checksums of the copies as the service account
+      ansible.builtin.command:
+        argv: "{{ __remote_desktop_runuser + ['sha256sum', '--', item.dest] }}"
+        chdir: "{{ __remote_desktop_home }}"
+      loop: "{{ __remote_desktop_pairs }}"
+      loop_control:
+        label: "{{ item.dest }}"
+        index_var: __index
+      register: __remote_desktop_copy_sum
+      changed_when: >-
+        __remote_desktop_check_mode | bool and __remote_desktop_copy_sum.stdout.split() | first | d('')
+        != __remote_desktop_source_stat.results[__index].stat.checksum
+      failed_when: false
+      check_mode: false
+      notify: Restart gnome-remote-desktop
+
+    # Root reads the operator's file without following a link; key bytes never pass Ansible
+    - name: Copy the supplied certificate and key as the service account
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: >-
+          set -o pipefail && umask 077 && dd if="$GRD_SRC" iflag=nofollow status=none
+          | runuser -u "$GRD_USER" -- env LC_ALL=C HOME="$GRD_HOME" dd of="$GRD_DEST" status=none
+        chdir: "{{ __remote_desktop_home }}"
+      environment:
+        GRD_USER: "{{ __remote_desktop_user }}"
+        GRD_HOME: "{{ __remote_desktop_home }}"
+        GRD_SRC: "{{ item.0.src }}"
+        GRD_DEST: "{{ item.0.dest }}"
+      loop: "{{ __remote_desktop_pairs | zip(__remote_desktop_source_stat.results,
+        __remote_desktop_copy_sum.results) | list }}"
+      loop_control:
+        label: "{{ item.0.dest }}"
+      when: (item.2.stdout | d('')).split() | first | d('') != item.1.stat.checksum
+      changed_when: true
+      no_log: "{{ remote_desktop_secure_logging }}"
+      notify: Restart gnome-remote-desktop
+
+- name: Read the modes of the private key and the copies
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  loop:
+    - "{{ __remote_desktop_selfsigned_key }}"
+    - "{{ __remote_desktop_supplied_cert }}"
+    - "{{ __remote_desktop_supplied_key }}"
+  register: __remote_desktop_key_mode_stat
+  changed_when:
+    - __remote_desktop_check_mode | bool
+    - __remote_desktop_key_mode_stat.stat.mode | d('0600') != '0600'
+
+- name: Restrict the private key and the copies to the service account
+  ansible.builtin.command:
+    argv: "{{ __remote_desktop_runuser + ['chmod', '0600', '--'] + __paths }}"
+    chdir: "{{ __remote_desktop_home }}"
+  vars:
+    __paths: "{{ __remote_desktop_key_mode_stat.results | selectattr('stat.exists')
+      | rejectattr('stat.mode', 'eq', '0600') | map(attribute='item') | list }}"
+  when: __paths | length > 0
+  changed_when: true

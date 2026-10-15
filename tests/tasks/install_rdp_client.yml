@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: MIT
+---
+- name: Install the RDP client that checks authentication
+  ansible.builtin.package:
+    name: freerdp
+    state: present
+  register: __rd_client_install
+  until: __rd_client_install is success
+  retries: 3
+  delay: 10

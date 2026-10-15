@@ -1,0 +1,109 @@
+# SPDX-License-Identifier: MIT
+---
+- name: Read whether grdctl is installed
+  ansible.builtin.stat:
+    path: /usr/bin/grdctl
+    get_checksum: false
+  register: __remote_desktop_grdctl_stat
+
+- name: Turn remote login off in gnome-remote-desktop
+  when: __remote_desktop_grdctl_stat.stat.exists
+  vars:
+    __lines: "{{ (__remote_desktop_credentials.stdout | d('')).split('\n') }}"
+    __shown: "{{ __lines | select('match', __remote_desktop_credential_line_pattern)
+      | list | length >= 2 }}"
+    __stored: "{{ __lines | select('match', __remote_desktop_credential_value_pattern)
+      | list | length > 0 }}"
+  block:
+    - name: Generate {{ __remote_desktop_conf }}
+      ansible.builtin.include_tasks: write_conf.yml
+
+    - name: Read the GNOME Settings override and the copies of a supplied pair
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+        get_checksum: false
+        get_mime: false
+        get_attributes: false
+      loop:
+        - "{{ __remote_desktop_override_conf }}"
+        - "{{ __remote_desktop_supplied_cert }}"
+        - "{{ __remote_desktop_supplied_key }}"
+      register: __remote_desktop_leftover_stat
+      changed_when: __remote_desktop_check_mode | bool and __remote_desktop_leftover_stat.stat.exists
+
+    - name: Remove the GNOME Settings override and the copies as the service account
+      ansible.builtin.command:
+        argv: "{{ __remote_desktop_runuser + ['rm', '-f', '--'] + __paths }}"
+        chdir: "{{ __remote_desktop_home }}"
+      vars:
+        __paths: "{{ __remote_desktop_leftover_stat.results | selectattr('stat.exists')
+          | map(attribute='item') | list }}"
+      when: __paths | length > 0
+      changed_when: true
+
+    - name: Read the stored credentials as the service account
+      ansible.builtin.command:
+        argv: "{{ __remote_desktop_runuser + ['grdctl', 'status', '--show-credentials'] }}"
+        chdir: "{{ __remote_desktop_home }}"
+      register: __remote_desktop_credentials
+      changed_when: __remote_desktop_check_mode | bool and (__stored | bool or not __shown | bool)
+      failed_when: false
+      check_mode: false
+      no_log: "{{ remote_desktop_secure_logging }}"
+      when: __remote_desktop_store_present | bool
+
+    - name: Record whether credentials are stored
+      ansible.builtin.set_fact:
+        __remote_desktop_credentials_stored: "{{ __remote_desktop_store_present | bool
+          and (__stored | bool or not __shown | bool) }}"
+        __remote_desktop_credentials: ""
+      no_log: "{{ remote_desktop_secure_logging }}"
+
+    - name: Clear the stored credentials as the service account
+      ansible.builtin.command:
+        argv: "{{ __remote_desktop_runuser + ['grdctl', 'rdp', 'clear-credentials'] }}"
+        chdir: "{{ __remote_desktop_home }}"
+      when: __remote_desktop_credentials_stored | bool
+      changed_when: true
+      failed_when: false
+
+    - name: Read the credentials back as the service account
+      ansible.builtin.command:
+        argv: "{{ __remote_desktop_runuser + ['grdctl', 'status', '--show-credentials'] }}"
+        chdir: "{{ __remote_desktop_home }}"
+      register: __remote_desktop_credentials
+      changed_when: false
+      failed_when: false
+      no_log: "{{ remote_desktop_secure_logging }}"
+      when:
+        - __remote_desktop_credentials_stored | bool
+        - not __remote_desktop_check_mode | bool
+
+    - name: Record whether credentials remain
+      ansible.builtin.set_fact:
+        __remote_desktop_credentials_stored: "{{ __stored | bool or not __shown | bool }}"
+        __remote_desktop_credentials: ""
+      no_log: "{{ remote_desktop_secure_logging }}"
+      when:
+        - __remote_desktop_credentials_stored | bool
+        - not __remote_desktop_check_mode | bool
+
+    - name: Fail if credentials remain
+      ansible.builtin.fail:
+        msg: >-
+          grdctl rdp clear-credentials did not clear the stored RDP credentials,
+          or grdctl status could not show that they are gone.
+      when:
+        - __remote_desktop_credentials_stored | bool
+        - not __remote_desktop_check_mode | bool
+
+    - name: Ensure gnome-remote-desktop is stopped and disabled
+      ansible.builtin.systemd_service:
+        name: "{{ __remote_desktop_service }}"
+        enabled: false
+        state: "{{ 'stopped' if __remote_desktop_is_booted | bool else omit }}"
+
+- name: Close the RDP port in firewalld
+  ansible.builtin.include_tasks: firewall.yml
+  when: remote_desktop_manage_firewall | bool

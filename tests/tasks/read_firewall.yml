@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: MIT
+---
+# Sets __rd_fw for the default zone, __rd_fw_zone (public until setup_firewalld.yml reads it)
+- name: Read the firewalld state
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -o pipefail
+      zone={{ __rd_fw_zone | d('public') | quote }}
+      file=/etc/firewalld/zones/$zone.xml
+      installed=no
+      if rpm -q --quiet firewalld; then installed=yes; fi
+      unit=$(systemctl is-enabled firewalld.service 2> /dev/null)
+      active=$(systemctl is-active firewalld.service)
+      echo "installed: '$installed'"
+      echo "unit: '${unit:-absent}'"
+      echo "active: '$active'"
+      if [ -f "$file" ]; then
+        echo "zone_sha256: '$(sha256sum "$file" | cut -d ' ' -f 1)'"
+      else
+        echo "zone_sha256: 'absent'"
+      fi
+      if [ -f "$file" ] && grep -q '<service name="rdp"/>' "$file"; then
+        echo "rdp_permanent: 'yes'"
+      else
+        echo "rdp_permanent: 'no'"
+      fi
+      if [ "$active" = active ]; then
+        echo "services_runtime: '$(firewall-cmd --zone="$zone" --list-services)'"
+        echo "services_permanent: '$(firewall-cmd --permanent --zone="$zone" --list-services)'"
+      else
+        echo "services_runtime: ''"
+        echo "services_permanent: ''"
+      fi
+  register: __rd_fw_raw
+  changed_when: false
+
+- name: Keep the firewalld state
+  ansible.builtin.set_fact:
+    __rd_fw: "{{ __rd_fw_raw.stdout | from_yaml }}"

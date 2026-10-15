@@ -1,0 +1,10 @@
+{{ ansible_managed | comment }}
+{# The marker says the role set up remote login; a disable run keeps it but never adds it #}
+{% if remote_desktop_enabled | bool or __remote_desktop_marker_present | bool %}
+{{ "system_role:remote_desktop" | comment(prefix="", postfix="") }}
+{% endif %}
+[RDP]
+enabled={{ (remote_desktop_enabled | bool) | ternary('true', 'false') }}
+port={{ __remote_desktop_port }}
+tls-cert={{ __remote_desktop_active_cert }}
+tls-key={{ __remote_desktop_active_key }}

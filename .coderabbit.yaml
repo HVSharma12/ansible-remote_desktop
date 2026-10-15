@@ -61,13 +61,11 @@ reviews:
 
           Example:
           ```
-          Feature: Introduce the template_secure_logging variable
+          Feature: Introduce the remote_desktop_secure_logging variable
 
           Reason: Currently, all sensitive tasks use hard-coded no_log: true, which makes debugging difficult.
 
-          Result: Users can now set template_secure_logging: false for debugging while maintaining secure defaults.
-
-          Issue Tracker Tickets (Jira or BZ if any): RHEL-12345
+          Result: Users can now set remote_desktop_secure_logging: false for debugging while maintaining secure defaults.
 
           Signed-off-by: John Doe john.doe@example.com
 
@@ -109,9 +107,9 @@ reviews:
           ```yaml
           - name: Task with sensitive data
             ansible.builtin.command: sensitive command
-            no_log: "{{ template_secure_logging }}"
+            no_log: "{{ remote_desktop_secure_logging }}"
           ```
-          Ensure `template_secure_logging: true` is defined in defaults/main.yml
+          Ensure `remote_desktop_secure_logging: true` is defined in defaults/main.yml
 
         - For facts modules (package_facts, service_facts):
           ```yaml
@@ -132,22 +130,22 @@ reviews:
         ```yaml
         - name: Install packages
           ansible.builtin.package:
-            name: "{{ __template_packages }}"
+            name: "{{ __remote_desktop_packages }}"
             state: present
-            use: "{{ (__template_is_ostree | d(false)) | ternary('ansible.posix.rhel_rpm_ostree', omit) }}"
+            use: "{{ (__remote_desktop_is_ostree | d(false)) | ternary('ansible.posix.rhel_rpm_ostree', omit) }}"
         ```
 
         **Non-Red Hat systems (apt based) - no OSTree handling needed:**
         ```yaml
         - name: Install packages
           ansible.builtin.package:
-            name: "{{ __template_packages }}"
+            name: "{{ __remote_desktop_packages }}"
             state: present
           when: ansible_facts["pkg_mgr"] == 'apt'
         ```
 
         **Pattern explanation:**
-        - `__template_is_ostree` detects OSTree/rpm-ostree systems (RHEL/CentOS/Fedora variants)
+        - `__remote_desktop_is_ostree` detects OSTree/rpm-ostree systems (RHEL/CentOS/Fedora variants)
         - This variable should already exist in vars/main.yml - do NOT suggest adding it
         - `| d(false)` provides safe default if variable undefined
         - `ternary()` selects `ansible.posix.rhel_rpm_ostree` for OSTree, `omit` otherwise
@@ -158,7 +156,7 @@ reviews:
         - Use ansible.builtin modules or command module instead
 
         **Referencing other system roles:**
-        - Use FQCN: `fedora.linux_system_roles.template`
+        - Use FQCN: `fedora.linux_system_roles.remote_desktop`
 
         **Idempotency:**
         - Tasks must be idempotent - safe to run multiple times without unintended changes
@@ -188,7 +186,7 @@ reviews:
     # ========================================
     - path: "handlers/**/*.yml"
       instructions: |
-        - Handlers with sensitive data must use `no_log: "{{ template_secure_logging }}"`
+        - Handlers with sensitive data must use `no_log: "{{ remote_desktop_secure_logging }}"`
 
     # ========================================
     # Test Playbooks
@@ -204,7 +202,7 @@ reviews:
           - name: Run role
             ansible.builtin.include_tasks: tasks/run_role_with_clear_facts.yml
             vars:
-              template_<parameter>: <value>
+              remote_desktop_<parameter>: <value>
           ```
           The only exception to this rule is in tests_invalid_inputs.yml where we need to use the include_role directly to test the invalid inputs.
 
@@ -231,14 +229,14 @@ reviews:
       instructions: |
         **Required headers (in this order):**
         1. ansible_managed header: `{{ ansible_managed | comment }}`
-        2. Role fingerprint: `{{ "system_role:template" | comment(prefix="", postfix="") }}`
+        2. Role fingerprint: `{{ "system_role:remote_desktop" | comment(prefix="", postfix="") }}`
 
     # ========================================
     # Variable Definitions - defaults/
     # ========================================
     - path: "defaults/**/*.yml"
       instructions: |
-        - All variables MUST be prefixed with `template_`
+        - All variables MUST be prefixed with `remote_desktop_`
         - All variables MUST be stored in the file defaults/main.yml, Ansible
           doesn't include variables from other files.
         - These are user-facing API variables
@@ -251,7 +249,7 @@ reviews:
     # ========================================
     - path: "vars/**/*.yml"
       instructions: |
-        - Internal variables MUST be prefixed with `__template_`
+        - Internal variables MUST be prefixed with `__remote_desktop_`
         - User-facing variables belong in defaults/main.yml, not here
 
     # ========================================

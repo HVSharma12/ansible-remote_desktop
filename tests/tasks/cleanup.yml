@@ -1,0 +1,54 @@
+# SPDX-License-Identifier: MIT
+---
+# Turns remote login off through the role and removes the test's fixtures, so tests can run in one VM
+- name: Stop the fixture listener
+  ansible.builtin.systemd_service:
+    name: rdtest-listener.service
+    state: stopped
+  failed_when: false
+
+- name: Remove the fixture listener's directory
+  ansible.builtin.file:
+    path: /run/rdtest-listener
+    state: absent
+
+- name: Turn remote login off through the role
+  block:
+    - name: Run the role with remote_desktop_enabled false
+      ansible.builtin.include_tasks: run_role_with_clear_facts.yml
+      vars:
+        remote_desktop_enabled: false
+        remote_desktop_manage_firewall: true
+  rescue:
+    - name: Keep the failure for the end of the cleanup
+      ansible.builtin.set_fact:
+        __rd_cleanup_error: "{{ ansible_failed_result.msg | d('the role failed') }}"
+
+- name: Remove the firewalld fixture
+  when: __rd_fw_installed_by_test | d(false)
+  block:
+    - name: Unmask firewalld
+      ansible.builtin.systemd_service:
+        name: firewalld.service
+        masked: false
+
+    - name: Remove firewalld
+      ansible.builtin.package:
+        name: firewalld
+        state: absent
+
+    - name: Remove the configuration that firewalld leaves behind
+      ansible.builtin.file:
+        path: /etc/firewalld
+        state: absent
+
+- name: Remove the TLS fixture directory
+  ansible.builtin.file:
+    path: "{{ __rd_fx }}"
+    state: absent
+  when: __rd_fx is defined
+
+- name: Fail if remote login could not be turned off
+  ansible.builtin.fail:
+    msg: "The cleanup could not turn remote login off: {{ __rd_cleanup_error }}"
+  when: __rd_cleanup_error is defined

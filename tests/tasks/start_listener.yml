@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: MIT
+---
+# A listener on port 3389 that is not the daemon but has its process name; sets __rd_listener_pid
+- name: Read the state before starting the listener
+  ansible.builtin.include_tasks: read_state.yml
+
+- name: Require port 3389 to be free
+  ansible.builtin.assert:
+    that:
+      - __rd_state.listener_pids | trim | length == 0
+    fail_msg: "Port 3389 is already held by PID {{ __rd_state.listener_pids }}"
+    quiet: true
+
+- name: Create a directory for the listener
+  ansible.builtin.file:
+    path: /run/rdtest-listener
+    state: directory
+    mode: "0755"
+
+# The kernel names a process after the file it executes, so this python3 shows as gnome-remote-de
+- name: Link python3 under the daemon's name
+  ansible.builtin.file:
+    src: /usr/bin/python3
+    dest: /run/rdtest-listener/gnome-remote-desktop
+    state: link
+
+- name: Start the listener
+  ansible.builtin.command:
+    argv:
+      - systemd-run
+      - --collect
+      - --unit=rdtest-listener
+      - /run/rdtest-listener/gnome-remote-desktop
+      - -c
+      - 'import socket, time; s = socket.socket(); s.bind(("127.0.0.1", 3389)); s.listen(); time.sleep(3600)'
+  changed_when: true
+
+- name: Wait for the listener
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: 3389
+    timeout: 30
+
+- name: Read the PID of the listener
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - show
+      - -P
+      - MainPID
+      - rdtest-listener.service
+  register: __rd_listener_raw
+  changed_when: false
+
+- name: Keep the PID of the listener
+  ansible.builtin.set_fact:
+    __rd_listener_pid: "{{ __rd_listener_raw.stdout | trim }}"

@@ -1,0 +1,54 @@
+# SPDX-License-Identifier: MIT
+---
+# Input: role variables, __rd_leg, __rd_fw_expect (unchanged, added or removed), __rd_fw_second_run (default true)
+- name: Read firewalld before the run
+  ansible.builtin.include_tasks: read_firewall.yml
+
+- name: Keep firewalld before the run
+  ansible.builtin.set_fact:
+    __rd_fw_before: "{{ __rd_fw }}"
+
+- name: Run the role
+  ansible.builtin.include_tasks: run_role_with_clear_facts.yml
+
+- name: Read firewalld after the run
+  ansible.builtin.include_tasks: read_firewall.yml
+
+- name: Assert what the run did to firewalld
+  ansible.builtin.assert:
+    that:
+      - __rd_fw.installed == __rd_fw_before.installed
+      - __rd_fw.unit == __rd_fw_before.unit
+      - __rd_fw.active == __rd_fw_before.active
+      - __rd_fw_expect != 'unchanged' or __rd_fw.zone_sha256 == __rd_fw_before.zone_sha256
+      - __rd_fw_expect != 'unchanged' or __rd_fw.services_runtime == __rd_fw_before.services_runtime
+      - __rd_fw_expect != 'added' or __rd_fw.rdp_permanent == 'yes'
+      - __rd_fw_expect != 'added' or 'rdp' in __rd_fw.services_runtime.split()
+      - __rd_fw_expect != 'removed' or __rd_fw.rdp_permanent == 'no'
+      - __rd_fw_expect != 'removed' or 'rdp' not in __rd_fw.services_runtime.split()
+      - __rd_fw.services_runtime.split() | difference(['rdp']) | sort
+        == __rd_fw_before.services_runtime.split() | difference(['rdp']) | sort
+      - __rd_fw.services_permanent.split() | difference(['rdp']) | sort
+        == __rd_fw_before.services_permanent.split() | difference(['rdp']) | sort
+    fail_msg: "{{ __rd_leg }}, expected {{ __rd_fw_expect }}. Before: {{ __rd_fw_before }} After: {{ __rd_fw }}"
+    quiet: true
+
+- name: Run the role a second time
+  when: __rd_fw_second_run | d(true)
+  block:
+    - name: Keep firewalld after the first run
+      ansible.builtin.set_fact:
+        __rd_fw_first: "{{ __rd_fw }}"
+
+    - name: Run the role again
+      ansible.builtin.include_tasks: run_role_with_clear_facts.yml
+
+    - name: Read firewalld after the second run
+      ansible.builtin.include_tasks: read_firewall.yml
+
+    - name: Assert that the second run left firewalld unchanged
+      ansible.builtin.assert:
+        that:
+          - __rd_fw == __rd_fw_first
+        fail_msg: "{{ __rd_leg }}, second run. Before: {{ __rd_fw_first }} After: {{ __rd_fw }}"
+        quiet: true

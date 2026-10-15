@@ -1,0 +1,62 @@
+# SPDX-License-Identifier: MIT
+---
+- name: Remote login comes back after a reboot
+  hosts: all
+  tags:
+    - tests::reboot
+  tasks:
+    - name: Test a reboot
+      block:
+        - name: Generate the test credentials
+          ansible.builtin.include_tasks: tasks/setup_credentials.yml
+
+        - name: Install the RDP client
+          ansible.builtin.include_tasks: tasks/install_rdp_client.yml
+
+        - name: Turn remote login on
+          ansible.builtin.include_tasks: tasks/run_role_with_clear_facts.yml
+          vars:
+            remote_desktop_username: "{{ __rd_test_user }}"
+            remote_desktop_password: "{{ __rd_test_pass }}"
+
+        - name: Reboot
+          ansible.builtin.reboot:
+            reboot_timeout: 900
+
+        - name: Wait up to 90 seconds for the daemon's own process to listen on port 3389
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: |
+              set -o pipefail
+              main=$(systemctl show -P MainPID gnome-remote-desktop.service)
+              pids=$(ss -Hltnp 'sport = :3389' | grep -o 'pid=[0-9]*' | cut -d = -f 2 | sort -u | tr '\n' ' ')
+              echo "MainPID $main, listening $pids"
+              [ "$main" != 0 ] && [ "$pids" = "$main " ]
+          register: __rd_listening
+          until: __rd_listening.rc == 0
+          retries: 45
+          delay: 2
+          changed_when: false
+
+        - name: Read the state after the reboot
+          ansible.builtin.include_tasks: tasks/read_state.yml
+
+        - name: Assert that the boot target, GDM and the daemon came back
+          ansible.builtin.assert:
+            that:
+              - __rd_state.default_target == 'graphical.target'
+              - __rd_state.gdm_active == 'active'
+              - __rd_state.active == 'active'
+            fail_msg: "Observed: {{ __rd_state }}"
+            quiet: true
+
+        - name: Authenticate after the reboot, with no manual restart
+          ansible.builtin.include_tasks: tasks/check_rdp_auth.yml
+          vars:
+            __rd_auth_user: "{{ __rd_test_user }}"
+            __rd_auth_pass: "{{ __rd_test_pass }}"
+            __rd_auth_expect: ok
+      always:
+        - name: Clean up
+          ansible.builtin.include_tasks: tasks/cleanup.yml
+          tags: tests::cleanup

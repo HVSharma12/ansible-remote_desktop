@@ -1,0 +1,205 @@
+# SPDX-License-Identifier: MIT
+---
+- name: Turn remote login on with the variables of the shipped example
+  hosts: all
+  vars:
+    __rd_data: /var/lib/gnome-remote-desktop/.local/share/gnome-remote-desktop
+    __rd_conf: /etc/gnome-remote-desktop/grd.conf
+    __rd_packages: [patterns-gnome-gnome, gnome-remote-desktop, gnome-console, openssl]
+  tasks:
+    - name: Test remote login
+      block:
+        - name: Generate the test credentials
+          ansible.builtin.include_tasks: tasks/setup_credentials.yml
+
+        - name: Install the RDP client
+          ansible.builtin.include_tasks: tasks/install_rdp_client.yml
+
+        - name: Read firewalld before the run
+          ansible.builtin.include_tasks: tasks/read_firewall.yml
+
+        - name: Keep firewalld before the run
+          ansible.builtin.set_fact:
+            __rd_fw_start: "{{ __rd_fw }}"
+
+        - name: Run the role with the example's variables
+          ansible.builtin.include_tasks: tasks/run_role_with_clear_facts.yml
+          vars:
+            remote_desktop_username: "{{ __rd_test_user }}"
+            remote_desktop_password: "{{ __rd_test_pass }}"
+            remote_desktop_manage_firewall: true
+
+        - name: Check that every package the role installs is there
+          ansible.builtin.command:  # noqa command-instead-of-module
+            argv: "{{ ['rpm', '-q', '--whatprovides'] + __rd_packages }}"
+          changed_when: false
+
+        - name: Read firewalld after the run
+          ansible.builtin.include_tasks: tasks/read_firewall.yml
+
+        - name: Read the state after the run
+          ansible.builtin.include_tasks: tasks/read_state.yml
+
+        - name: Keep the state after the first run
+          ansible.builtin.set_fact:
+            __rd_first: "{{ __rd_state }}"
+
+        - name: Assert the boot target, GDM and the daemon
+          ansible.builtin.assert:
+            that:
+              - __rd_fw.installed == __rd_fw_start.installed
+              - __rd_first.default_target == 'graphical.target'
+              - __rd_first.gdm_active == 'active'
+              - __rd_first.gdm_enabled == 'enabled'
+              - __rd_first.active == 'active'
+              - __rd_first.enabled == 'enabled'
+              - __rd_first.override == 'absent'
+              - __rd_first.listener_pids.split() == [__rd_first.main_pid]
+            fail_msg: "Observed: {{ __rd_first }}"
+            quiet: true
+
+        - name: Read the owners and modes of the managed files
+          ansible.builtin.stat:
+            path: "{{ item }}"
+            follow: false
+            get_checksum: false
+          loop:
+            - "{{ __rd_conf }}"
+            - "{{ __rd_data }}"
+            - "{{ __rd_data }}/tls.key"
+          register: __rd_files
+
+        - name: Assert the owners and modes of the managed files
+          ansible.builtin.assert:
+            that:
+              - __rd_files.results | map(attribute='stat.pw_name') | unique | list == ['gnome-remote-desktop']
+              - __rd_files.results | map(attribute='stat.mode') | list == ['0644', '0700', '0600']
+              - __rd_files.results[1].stat.isdir
+            fail_msg: "Observed: {{ __rd_files.results | map(attribute='stat') | list }}"
+            quiet: true
+
+        - name: Check the header of grd.conf
+          ansible.builtin.include_tasks: tasks/check_header.yml
+          vars:
+            __file: "{{ __rd_conf }}"
+            __fingerprint: system_role:remote_desktop
+
+        - name: Read grd.conf
+          ansible.builtin.slurp:
+            path: "{{ __rd_conf }}"
+          register: __rd_conf_file
+
+        - name: Assert the settings in grd.conf
+          ansible.builtin.assert:
+            that:
+              - "'[RDP]' in __rd_lines"
+              - "'enabled=true' in __rd_lines"
+              - "'port=3389' in __rd_lines"
+              - "('tls-cert=' ~ __rd_data ~ '/tls.crt') in __rd_lines"
+              - "('tls-key=' ~ __rd_data ~ '/tls.key') in __rd_lines"
+            fail_msg: "Observed: {{ __rd_lines }}"
+            quiet: true
+          vars:
+            __rd_lines: "{{ (__rd_conf_file.content | b64decode).splitlines() | map('replace', ' ', '') | list }}"
+
+        - name: Assert what grdctl reports and which certificate is served
+          ansible.builtin.assert:
+            that:
+              - "'Status: enabled' in __rd_first.status"
+              - "'Port: 3389' in __rd_first.status"
+              - "'Username: (hidden)' in __rd_first.status"
+              - "'Password: (hidden)' in __rd_first.status"
+              - __rd_first.fp_conf != 'absent'
+              - __rd_first.fp_conf == __rd_first.fp_self
+              - __rd_first.fp_conf == __rd_first.status_fp
+              - __rd_first.fp_conf == remote_desktop_tls_fingerprint | lower | replace(':', '')
+            fail_msg: "{{ __rd_first }}, exported fingerprint {{ remote_desktop_tls_fingerprint | d('undefined') }}"
+            quiet: true
+
+        - name: Authenticate with the right password
+          ansible.builtin.include_tasks: tasks/check_rdp_auth.yml
+          vars:
+            __rd_auth_user: "{{ __rd_test_user }}"
+            __rd_auth_pass: "{{ __rd_test_pass }}"
+            __rd_auth_expect: ok
+
+        - name: Authenticate with a wrong password
+          ansible.builtin.include_tasks: tasks/check_rdp_auth.yml
+          vars:
+            __rd_auth_user: "{{ __rd_test_user }}"
+            __rd_auth_pass: "{{ __rd_wrong_pass }}"
+            __rd_auth_expect: wrong_password
+
+        - name: Run the role again with the same variables
+          ansible.builtin.include_tasks: tasks/run_role_with_clear_facts.yml
+          vars:
+            remote_desktop_username: "{{ __rd_test_user }}"
+            remote_desktop_password: "{{ __rd_test_pass }}"
+            remote_desktop_manage_firewall: true
+
+        - name: Read the state after the second run
+          ansible.builtin.include_tasks: tasks/read_state.yml
+          vars:
+            __rd_since: "{{ __rd_first.now }}"
+
+        - name: Assert that the second run changed nothing
+          ansible.builtin.include_tasks: tasks/assert_unchanged.yml
+          vars:
+            __rd_from: "{{ __rd_first }}"
+            __rd_to: "{{ __rd_state }}"
+            __rd_keys: [main_pid, conf_sha256, fp_conf, store_mtime, override, enabled, active, default_target]
+
+        - name: Assert that the second run neither restarted the daemon nor changed the exported fingerprint
+          ansible.builtin.assert:
+            that:
+              - __rd_state.starts == '0'
+              - remote_desktop_tls_fingerprint | lower | replace(':', '') == __rd_first.fp_conf
+            fail_msg: "starts={{ __rd_state.starts }}, exported fingerprint {{ remote_desktop_tls_fingerprint }}"
+            quiet: true
+
+        - name: Authenticate again after the second run
+          ansible.builtin.include_tasks: tasks/check_rdp_auth.yml
+          vars:
+            __rd_auth_user: "{{ __rd_test_user }}"
+            __rd_auth_pass: "{{ __rd_test_pass }}"
+            __rd_auth_expect: ok
+
+        - name: Run the role in check mode
+          ansible.builtin.include_tasks:
+            file: tasks/run_role_with_clear_facts.yml
+            apply:
+              check_mode: true
+          vars:
+            remote_desktop_username: "{{ __rd_test_user }}"
+            remote_desktop_password: "{{ __rd_test_pass }}"
+            remote_desktop_manage_firewall: true
+
+        - name: Read the state after the check run
+          ansible.builtin.include_tasks: tasks/read_state.yml
+          vars:
+            __rd_since: "{{ __rd_first.now }}"
+
+        - name: Assert that the check run changed nothing
+          ansible.builtin.include_tasks: tasks/assert_unchanged.yml
+          vars:
+            __rd_from: "{{ __rd_first }}"
+            __rd_to: "{{ __rd_state }}"
+            __rd_keys: [main_pid, conf_sha256, fp_conf, store_mtime, override, enabled, active, default_target]
+
+        - name: Assert that the check run did not restart the daemon
+          ansible.builtin.assert:
+            that:
+              - __rd_state.starts == '0'
+            fail_msg: "The daemon started {{ __rd_state.starts }} times during the check run"
+            quiet: true
+
+        - name: Check that the journal carries no test password
+          ansible.builtin.include_tasks: tasks/check_journal.yml
+          vars:
+            __rd_secrets:
+              - "{{ __rd_test_pass }}"
+              - "{{ __rd_wrong_pass }}"
+      always:
+        - name: Clean up
+          ansible.builtin.include_tasks: tasks/cleanup.yml
+          tags: tests::cleanup

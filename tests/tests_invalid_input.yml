@@ -1,0 +1,195 @@
+# SPDX-License-Identifier: MIT
+---
+- name: Refuse invalid input before any change
+  hosts: all
+  vars:
+    __rd_fx: /root/rdtls
+  tasks:
+    - name: Test invalid input
+      block:
+        - name: Generate the test credentials
+          ansible.builtin.include_tasks: tasks/setup_credentials.yml
+
+        - name: Create a fixture pair
+          ansible.builtin.include_tasks: tasks/make_tls_pair.yml
+          vars:
+            __rd_pair: a
+
+        - name: Read the state before the first run
+          ansible.builtin.include_tasks: tasks/read_state.yml
+
+        - name: Keep the state before the first run
+          ansible.builtin.set_fact:
+            __rd_start: "{{ __rd_state }}"
+
+        - name: Refuse remote_desktop_enabled that is not a boolean
+          ansible.builtin.include_tasks: tasks/invalid_input_leg.yml
+          vars:
+            __rd_leg: remote_desktop_enabled maybe
+            __rd_expect: ["argument 'remote_desktop_enabled' is of type", unable to convert to bool]
+            __rd_secret: "{{ __rd_test_pass }}"
+            remote_desktop_enabled: maybe
+            remote_desktop_username: "{{ __rd_test_user }}"
+            remote_desktop_password: "{{ __rd_test_pass }}"
+
+        - name: Refuse a string for remote_desktop_transactional_update_reboot_ok
+          ansible.builtin.include_tasks: tasks/invalid_input_leg.yml
+          vars:
+            __rd_leg: remote_desktop_transactional_update_reboot_ok "yes"
+            __rd_expect: [remote_desktop_transactional_update_reboot_ok]
+            __rd_secret: "{{ __rd_test_pass }}"
+            remote_desktop_transactional_update_reboot_ok: "yes"
+            remote_desktop_username: "{{ __rd_test_user }}"
+            remote_desktop_password: "{{ __rd_test_pass }}"
+
+        - name: Refuse a user name without a password
+          ansible.builtin.include_tasks: tasks/invalid_input_leg.yml
+          vars:
+            __rd_leg: user name without password
+            __rd_expect: [remote_desktop_username, remote_desktop_password]
+            remote_desktop_username: "{{ __rd_test_user }}"
+
+        - name: Refuse a password without a user name
+          ansible.builtin.include_tasks: tasks/invalid_input_leg.yml
+          vars:
+            __rd_leg: password without user name
+            __rd_expect: [remote_desktop_username, remote_desktop_password]
+            __rd_secret: "{{ __rd_test_pass }}"
+            remote_desktop_password: "{{ __rd_test_pass }}"
+
+        - name: Refuse a password with a newline
+          ansible.builtin.include_tasks: tasks/invalid_input_leg.yml
+          vars:
+            __rd_leg: password with a newline
+            __rd_expect: [remote_desktop_password]
+            __rd_secret: "{{ __rd_test_pass[:12] }}"
+            remote_desktop_username: "{{ __rd_test_user }}"
+            remote_desktop_password: "{{ __rd_test_pass[:12] }}\n{{ __rd_test_pass[12:] }}"
+
+        - name: Refuse a password with a line separator
+          ansible.builtin.include_tasks: tasks/invalid_input_leg.yml
+          vars:
+            __rd_leg: password with U+2028
+            __rd_expect: [remote_desktop_password]
+            __rd_secret: "{{ __rd_test_pass[:12] }}"
+            remote_desktop_username: "{{ __rd_test_user }}"
+            remote_desktop_password: "{{ __rd_test_pass[:12] }}\u2028{{ __rd_test_pass[12:] }}"
+
+        - name: Refuse a password with a leading space
+          ansible.builtin.include_tasks: tasks/invalid_input_leg.yml
+          vars:
+            __rd_leg: password with a leading space
+            __rd_expect: [remote_desktop_password]
+            __rd_secret: "{{ __rd_test_pass }}"
+            remote_desktop_username: "{{ __rd_test_user }}"
+            remote_desktop_password: " {{ __rd_test_pass }}"
+
+        - name: Refuse a password shorter than 15 characters
+          ansible.builtin.include_tasks: tasks/invalid_input_leg.yml
+          vars:
+            __rd_leg: password of 14 characters
+            __rd_expect: [remote_desktop_password]
+            __rd_secret: "{{ __rd_test_pass[:14] }}"
+            remote_desktop_username: "{{ __rd_test_user }}"
+            remote_desktop_password: "{{ __rd_test_pass[:14] }}"
+
+        - name: Refuse the password None that a prompt without a terminal returns
+          ansible.builtin.include_tasks: tasks/invalid_input_leg.yml
+          vars:
+            __rd_leg: password None
+            __rd_expect: [remote_desktop_password]
+            remote_desktop_username: "{{ __rd_test_user }}"
+            remote_desktop_password: "None"
+
+        - name: Refuse a password that contains the user name
+          ansible.builtin.include_tasks: tasks/invalid_input_leg.yml
+          vars:
+            __rd_leg: password containing the user name
+            __rd_expect: [remote_desktop_password]
+            __rd_secret: "{{ __rd_test_pass[8:] }}"
+            remote_desktop_username: "{{ __rd_test_user }}"
+            remote_desktop_password: "{{ __rd_test_pass[:8] ~ __rd_test_user | upper ~ __rd_test_pass[8:] }}"
+
+        - name: Refuse a user name with a colon
+          ansible.builtin.include_tasks: tasks/invalid_input_leg.yml
+          vars:
+            __rd_leg: user name with ':'
+            __rd_expect: [remote_desktop_username]
+            __rd_secret: "{{ __rd_test_pass }}"
+            remote_desktop_username: "rd:tester"
+            remote_desktop_password: "{{ __rd_test_pass }}"
+
+        - name: Refuse a user name with a backslash
+          ansible.builtin.include_tasks: tasks/invalid_input_leg.yml
+          vars:
+            __rd_leg: user name with '\'
+            __rd_expect: [remote_desktop_username]
+            __rd_secret: "{{ __rd_test_pass }}"
+            remote_desktop_username: 'rd\tester'
+            remote_desktop_password: "{{ __rd_test_pass }}"
+
+        - name: Refuse a user name that grdctl would parse as an option
+          ansible.builtin.include_tasks: tasks/invalid_input_leg.yml
+          vars:
+            __rd_leg: user name --system
+            __rd_expect: [remote_desktop_username]
+            __rd_secret: "{{ __rd_test_pass }}"
+            remote_desktop_username: "--system"
+            remote_desktop_password: "{{ __rd_test_pass }}"
+
+        - name: Refuse the user name None that a prompt without a terminal returns
+          ansible.builtin.include_tasks: tasks/invalid_input_leg.yml
+          vars:
+            __rd_leg: user name None
+            __rd_expect: [remote_desktop_username]
+            __rd_secret: "{{ __rd_test_pass }}"
+            remote_desktop_username: "None"
+            remote_desktop_password: "{{ __rd_test_pass }}"
+
+        - name: Refuse a certificate without a key
+          ansible.builtin.include_tasks: tasks/invalid_input_leg.yml
+          vars:
+            __rd_leg: certificate without key
+            __rd_expect: [remote_desktop_cert, remote_desktop_private_key]
+            __rd_secret: "{{ __rd_test_pass }}"
+            remote_desktop_username: "{{ __rd_test_user }}"
+            remote_desktop_password: "{{ __rd_test_pass }}"
+            remote_desktop_cert: "{{ __rd_fx }}/a.crt"
+
+        - name: Refuse a relative certificate path
+          ansible.builtin.include_tasks: tasks/invalid_input_leg.yml
+          vars:
+            __rd_leg: relative certificate path
+            __rd_expect: [remote_desktop_cert]
+            __rd_secret: "{{ __rd_test_pass }}"
+            remote_desktop_username: "{{ __rd_test_user }}"
+            remote_desktop_password: "{{ __rd_test_pass }}"
+            remote_desktop_cert: a.crt
+            remote_desktop_private_key: "{{ __rd_fx }}/a.key"
+
+        - name: Refuse a certificate path that does not exist
+          ansible.builtin.include_tasks: tasks/invalid_input_leg.yml
+          vars:
+            __rd_leg: certificate path that does not exist
+            __rd_expect: ["{{ __rd_fx }}/missing.crt"]
+            __rd_secret: "{{ __rd_test_pass }}"
+            remote_desktop_username: "{{ __rd_test_user }}"
+            remote_desktop_password: "{{ __rd_test_pass }}"
+            remote_desktop_cert: "{{ __rd_fx }}/missing.crt"
+            remote_desktop_private_key: "{{ __rd_fx }}/a.key"
+
+        - name: Start a listener on port 3389 that is not the daemon but has its name
+          ansible.builtin.include_tasks: tasks/start_listener.yml
+
+        - name: Refuse to turn remote login on while another program holds port 3389
+          ansible.builtin.include_tasks: tasks/invalid_input_leg.yml
+          vars:
+            __rd_leg: another program on port 3389
+            __rd_expect: ["{{ __rd_listener_pid }}"]
+            __rd_secret: "{{ __rd_test_pass }}"
+            remote_desktop_username: "{{ __rd_test_user }}"
+            remote_desktop_password: "{{ __rd_test_pass }}"
+      always:
+        - name: Clean up
+          ansible.builtin.include_tasks: tasks/cleanup.yml
+          tags: tests::cleanup

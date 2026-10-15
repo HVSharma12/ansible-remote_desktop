@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: MIT
+---
+# Input: __rd_from and __rd_to, two read_state.yml results, and __rd_keys to compare
+- name: Assert that the state did not change
+  ansible.builtin.assert:
+    that:
+      - __rd_was == __rd_now
+    fail_msg: "Changed. Before: {{ __rd_was }} After: {{ __rd_now }}"
+    quiet: true
+  vars:
+    __rd_was: "{{ dict(__rd_keys | zip(__rd_keys | map('extract', __rd_from))) }}"
+    __rd_now: "{{ dict(__rd_keys | zip(__rd_keys | map('extract', __rd_to))) }}"

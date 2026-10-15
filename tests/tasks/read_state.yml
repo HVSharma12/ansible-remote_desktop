@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: MIT
+---
+# Sets __rd_state; given __rd_since (epoch seconds), it also counts the daemon's starts since then
+- name: Read the remote login state
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -o pipefail
+      unit=gnome-remote-desktop.service
+      data=/var/lib/gnome-remote-desktop/.local/share/gnome-remote-desktop
+      conf=/etc/gnome-remote-desktop/grd.conf
+      fp() { openssl x509 -noout -fingerprint -sha256 -in "$1" 2> /dev/null | sed 's/.*=//; s/://g' | tr 'A-F' 'a-f'; }
+      sha() { if [ -f "$1" ]; then sha256sum "$1" | cut -d ' ' -f 1; else echo absent; fi; }
+      cert=$(sed -n 's/^tls-cert *= *//p' "$conf" 2> /dev/null | tail -n 1)
+      store=absent
+      for f in "$data/credentials.ini" "$data/rdp-credentials.priv"; do
+        if [ -f "$f" ]; then store=$(stat -c %.9Y "$f"); break; fi
+      done
+      installed=absent
+      if rpm -q --quiet gnome-remote-desktop; then installed=$(rpm -q --qf '%{VERSION}' gnome-remote-desktop); fi
+      enabled=$(systemctl is-enabled "$unit" 2> /dev/null)
+      gdm_enabled=$(systemctl is-enabled gdm.service 2> /dev/null)
+      fp_conf=$(fp "${cert:-/nonexistent}")
+      fp_self=$(fp "$data/tls.crt")
+      fp_supplied=$(fp "$data/tls-supplied.crt")
+      since={{ ('@' ~ __rd_since) if __rd_since is defined else 'now' }}
+      starts=$(journalctl -q -o json --since "$since" MESSAGE_ID=39f53479d3a045ac8e11786248231fbf UNIT="$unit" | grep -c __CURSOR)
+      echo "now: '$(date +%s.%N)'"
+      echo "installed: '$installed'"
+      echo "enabled: '${enabled:-absent}'"
+      echo "active: '$(systemctl is-active "$unit")'"
+      echo "main_pid: '$(systemctl show -P MainPID "$unit")'"
+      echo "listener_pids: '$(ss -Hltnp 'sport = :3389' | grep -o 'pid=[0-9]*' | cut -d = -f 2 | sort -u | tr '\n' ' ')'"
+      echo "default_target: '$(systemctl get-default)'"
+      echo "gdm_enabled: '${gdm_enabled:-absent}'"
+      echo "gdm_active: '$(systemctl is-active gdm.service)'"
+      echo "conf_sha256: '$(sha "$conf")'"
+      echo "override: '$(test -e "$data/grd.conf" && echo present || echo absent)'"
+      echo "fp_conf: '${fp_conf:-absent}'"
+      echo "fp_self: '${fp_self:-absent}'"
+      echo "fp_supplied: '${fp_supplied:-absent}'"
+      echo "supplied_key_sha256: '$(sha "$data/tls-supplied.key")'"
+      echo "store_mtime: '$store'"
+      echo "starts: '$starts'"
+  register: __rd_state_raw
+  changed_when: false
+
+- name: Read the status that grdctl reports
+  ansible.builtin.command:
+    argv:
+      - grdctl
+      - --system
+      - status
+  environment:
+    LC_ALL: C
+  register: __rd_status_raw
+  changed_when: false
+  failed_when: false
+
+- name: Keep the state
+  ansible.builtin.set_fact:
+    __rd_state: "{{ __rd_state_raw.stdout | from_yaml | combine({'status': __rd_status, 'status_fp': __rd_status_fp}) }}"
+  vars:
+    __rd_status: "{{ __rd_status_raw.stdout_lines | d([]) | map('trim') | list }}"
+    __rd_status_fp: >-
+      {{ __rd_status | select('match', 'TLS fingerprint:') | first | d('')
+      | regex_replace('^TLS fingerprint: *', '') | lower | replace(':', '') }}

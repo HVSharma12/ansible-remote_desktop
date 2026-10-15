@@ -1,0 +1,272 @@
+# SPDX-License-Identifier: MIT
+---
+# Read-only: every refusal here comes before any change to the host
+- name: Read the paths of the service account
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  loop: "{{ __remote_desktop_tree + __remote_desktop_managed_files + [__remote_desktop_conf] }}"
+  register: __remote_desktop_tree_stat
+
+# A link or a FIFO in place of grd.conf is refused before anything reads it
+- name: Assert the paths of the service account are its own and not links
+  ansible.builtin.assert:
+    that:
+      - not item.stat.islnk
+      - item.stat.pw_name | d('') == __remote_desktop_user or item.item == __remote_desktop_conf
+      - item.stat.isreg or item.item != __remote_desktop_conf
+    fail_msg: >-
+      {{ item.item }} {{ 'is not a regular file' if item.item == __remote_desktop_conf
+      else 'is a symbolic link or is not owned by ' ~ __remote_desktop_user }},
+      so the role refuses to manage it.
+    quiet: true
+  loop: "{{ __remote_desktop_tree_stat.results | selectattr('stat.exists') | list }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Read the system settings of gnome-remote-desktop as the service account
+  ansible.builtin.command:
+    argv: "{{ __remote_desktop_runuser + ['cat', '--', __remote_desktop_conf] }}"
+  register: __remote_desktop_conf_read
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+# grdctl status creates an empty credentials.ini where there is none
+- name: Read whether a credential store exists
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  loop: "{{ __remote_desktop_credential_stores }}"
+  register: __remote_desktop_store_stat
+
+- name: Record whether this role set up remote login and whether a credential store exists
+  ansible.builtin.set_fact:
+    __remote_desktop_marker_present: "{{ __remote_desktop_conf_read.rc | d(1) == 0
+      and __remote_desktop_marker in __remote_desktop_conf_read.stdout }}"
+    __remote_desktop_store_present: "{{ __remote_desktop_store_stat.results
+      | selectattr('stat.exists') | list | length > 0 }}"
+
+- name: Check that remote login is already on, as no credentials are given
+  when:
+    - remote_desktop_enabled | bool
+    - remote_desktop_password | d('', true) | length == 0
+  block:
+    - name: Read whether gnome-remote-desktop is enabled
+      ansible.builtin.command:  # noqa command-instead-of-module
+        argv:
+          - systemctl
+          - is-enabled
+          - "{{ __remote_desktop_service }}"
+      register: __remote_desktop_unit_enabled
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Read the GNOME Settings override as the service account
+      ansible.builtin.command:
+        argv: "{{ __remote_desktop_runuser + ['cat', '--', __remote_desktop_override_conf] }}"
+      register: __remote_desktop_override_read
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Read the stored credentials as the service account
+      ansible.builtin.command:
+        argv: "{{ __remote_desktop_runuser + ['grdctl', 'status', '--show-credentials'] }}"
+        chdir: "{{ __remote_desktop_home }}"
+      register: __remote_desktop_credentials
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      no_log: "{{ remote_desktop_secure_logging }}"
+      when: __remote_desktop_store_present | bool
+
+    - name: Record whether remote login is already on
+      ansible.builtin.set_fact:
+        __remote_desktop_login_on: "{{ __unit_on | bool and __conf_on | bool
+          and __pair_stored | bool }}"
+        __remote_desktop_credentials: ""
+      vars:
+        __unit_on: "{{ __remote_desktop_unit_enabled.stdout | d('') == 'enabled' }}"
+        __conf: "{{ __remote_desktop_override_read.stdout
+          if __remote_desktop_override_read.rc | d(1) == 0
+          else __remote_desktop_conf_read.stdout | d('') }}"
+        __conf_on: "{{ __conf is search(__remote_desktop_conf_enabled_pattern) }}"
+        __pair_stored: "{{ (__remote_desktop_credentials.stdout | d('')).split('\n')
+          | select('match', __remote_desktop_credential_value_pattern) | list | length == 2 }}"
+      no_log: "{{ remote_desktop_secure_logging }}"
+
+    - name: Refuse to turn on remote login without credentials
+      ansible.builtin.assert:
+        that:
+          - __remote_desktop_login_on | bool
+        fail_msg: >-
+          Remote login is not on yet: set remote_desktop_username and
+          remote_desktop_password to turn it on.
+        quiet: true
+
+- name: Read the processes that listen on the RDP port
+  ansible.builtin.command:
+    argv:
+      - ss
+      - -Hltnp
+      - "sport = :{{ __remote_desktop_port }}"
+  register: __remote_desktop_port_read
+  changed_when: false
+  check_mode: false
+  when: __remote_desktop_is_booted | bool
+
+- name: Read the main PID of gnome-remote-desktop
+  ansible.builtin.command:  # noqa command-instead-of-module
+    argv:
+      - systemctl
+      - show
+      - -P
+      - MainPID
+      - "{{ __remote_desktop_service }}"
+  register: __remote_desktop_pid_read
+  changed_when: false
+  check_mode: false
+  when: __remote_desktop_is_booted | bool
+
+- name: Record which processes hold the RDP port
+  ansible.builtin.set_fact:
+    __remote_desktop_main_pid: "{{ __pid }}"
+    __remote_desktop_port_holders: "{{ __holders }}"
+    __remote_desktop_port_foreign: "{{ __holders | rejectattr('1', 'eq', __pid) | list }}"
+  vars:
+    __pid: "{{ __remote_desktop_pid_read.stdout | d('0') | trim }}"
+    __holders: "{{ __remote_desktop_port_read.stdout | d('')
+      | regex_findall(__remote_desktop_ss_process_pattern) | unique | list }}"
+
+- name: Assert no other program listens on the RDP port
+  ansible.builtin.assert:
+    that:
+      - __remote_desktop_port_foreign | length == 0
+    fail_msg: >-
+      TCP port {{ __remote_desktop_port }} is held by
+      {{ __remote_desktop_port_foreign | map('join', ' pid ') | join(', ') }},
+      not by {{ __remote_desktop_service }}. Stop that program before turning
+      on remote login.
+    quiet: true
+  when: remote_desktop_enabled | bool
+
+- name: Read the display-manager alias
+  ansible.builtin.stat:
+    path: /etc/systemd/system/display-manager.service
+    follow: false
+    get_checksum: false
+  register: __remote_desktop_dm_alias
+  when: remote_desktop_enabled | bool
+
+- name: Assert the display manager is GDM
+  ansible.builtin.assert:
+    that:
+      - >-
+        not __remote_desktop_dm_alias.stat.exists
+        or __target | basename == __remote_desktop_dm_service
+    fail_msg: >-
+      display-manager.service resolves to {{ __target | d('a file that is not a link', true) }},
+      not to {{ __remote_desktop_dm_service }}; remote login needs GDM as the display manager.
+    quiet: true
+  vars:
+    __target: "{{ __remote_desktop_dm_alias.stat.lnk_source | d('') }}"
+  when: remote_desktop_enabled | bool
+
+- name: Check the supplied certificate and key
+  when:
+    - remote_desktop_enabled | bool
+    - __remote_desktop_supplied | bool
+  block:
+    - name: Read the supplied certificate and key
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+        get_checksum: false
+      loop:
+        - "{{ remote_desktop_cert }}"
+        - "{{ remote_desktop_private_key }}"
+      register: __remote_desktop_supplied_stat
+
+    - name: Assert the supplied certificate and key are regular files
+      ansible.builtin.assert:
+        that:
+          - item.stat.isreg | d(false)
+        fail_msg: "{{ item.item }} does not exist or is not a regular file (links are refused)."
+        quiet: true
+      loop: "{{ __remote_desktop_supplied_stat.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Read whether openssl is installed
+      ansible.builtin.stat:
+        path: /usr/bin/openssl
+        get_checksum: false
+      register: __remote_desktop_openssl_stat
+
+    - name: Validate the supplied certificate and key with openssl
+      ansible.builtin.command:
+        argv: "{{ item }}"
+      loop:
+        - [openssl, x509, -in, "{{ remote_desktop_cert }}", -noout, -checkend, "0"]
+        - [openssl, x509, -in, "{{ remote_desktop_cert }}", -noout, -pubkey]
+        - [openssl, pkey, -in, "{{ remote_desktop_private_key }}", -passin, "pass:", -pubout]
+      register: __remote_desktop_pair_check
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      no_log: "{{ remote_desktop_secure_logging }}"
+      when: __remote_desktop_openssl_stat.stat.exists
+
+    - name: Assert the supplied certificate and key can be served
+      ansible.builtin.assert:
+        that:
+          - __problems | length == 0
+        fail_msg: >-
+          remote_desktop_cert and remote_desktop_private_key are refused:
+          {{ __problems | join('; ') }}.
+        quiet: true
+      vars:
+        __expiry: "{{ __remote_desktop_pair_check.results[0] }}"
+        __cert: "{{ __remote_desktop_pair_check.results[1] }}"
+        __key: "{{ __remote_desktop_pair_check.results[2] }}"
+        __problems: "{{ ['the certificate does not parse or has expired'
+          if __expiry.rc | d(1) != 0 else '',
+          'the key does not parse or is encrypted' if __key.rc | d(1) != 0 else '',
+          'the certificate does not match the key'
+          if __cert.rc | d(1) == 0 and __key.rc | d(1) == 0
+          and __cert.stdout != __key.stdout else ''] | select | list }}"
+      when: __remote_desktop_openssl_stat.stat.exists
+
+- name: Read the installed gnome-remote-desktop version
+  ansible.builtin.command:  # noqa command-instead-of-module
+    argv:
+      - rpm
+      - -q
+      - --qf
+      - "%{VERSION}"
+      - gnome-remote-desktop
+  register: __remote_desktop_grd_version
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: remote_desktop_enabled | bool
+
+- name: Assert the installed gnome-remote-desktop has the supported major version
+  ansible.builtin.assert:
+    that:
+      - __remote_desktop_grd_version.stdout.split('.') | first == __remote_desktop_grd_major
+    fail_msg: >-
+      gnome-remote-desktop {{ __remote_desktop_grd_version.stdout }} is installed;
+      this role supports version {{ __remote_desktop_grd_major }} only.
+    quiet: true
+  when:
+    - remote_desktop_enabled | bool
+    - __remote_desktop_grd_version.rc | d(1) == 0

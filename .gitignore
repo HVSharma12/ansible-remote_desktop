@@ -5,6 +5,7 @@ vault.yml
 /tests/.coverage
 /tests/htmlcov*
 /.tox
+/.ansible/
 /venv*/
 /.venv/
 .vscode/

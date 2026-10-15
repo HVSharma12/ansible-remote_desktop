@@ -4,44 +4,123 @@
 # You can override these by defining the same variable with a different
 # value in a platform/version specific file in vars/
 
-# Examples of non-distribution specific (generic) internal variables:
-__template_foo_config: foo.conf
-__template_packages: []
-__template_services: []
+__remote_desktop_supported_distributions:
+  - SLES
+  - SLES_SAP
+  - openSUSE Leap
+__remote_desktop_supported_major_version: "16"
+__remote_desktop_refused_variant_ids:
+  - transactional
+
+__remote_desktop_user: gnome-remote-desktop
+__remote_desktop_service: gnome-remote-desktop.service
+__remote_desktop_unit_path: /org/freedesktop/systemd1/unit/gnome_2dremote_2ddesktop_2eservice
+__remote_desktop_dm_service: gdm.service
+__remote_desktop_port: 3389
+__remote_desktop_firewall_service: rdp
+
+__remote_desktop_home: /var/lib/gnome-remote-desktop
+__remote_desktop_data_dir: "{{ __remote_desktop_home }}/.local/share/gnome-remote-desktop"
+__remote_desktop_dirs:
+  - "{{ __remote_desktop_home }}/.local"
+  - "{{ __remote_desktop_home }}/.local/share"
+  - "{{ __remote_desktop_data_dir }}"
+__remote_desktop_tree: "{{ [__remote_desktop_home] + __remote_desktop_dirs }}"
+__remote_desktop_conf: /etc/gnome-remote-desktop/grd.conf
+__remote_desktop_override_conf: "{{ __remote_desktop_data_dir }}/grd.conf"
+__remote_desktop_marker: system_role:remote_desktop
+__remote_desktop_conf_content: "{{ lookup('ansible.builtin.template', 'grd.conf.j2') | trim }}"
+__remote_desktop_conf_write: 'umask 022 && cat > "$1.new" && chmod 0644 -- "$1.new" && mv -f -- "$1.new" "$1"'
+__remote_desktop_selfsigned_cert: "{{ __remote_desktop_data_dir }}/tls.crt"
+__remote_desktop_selfsigned_key: "{{ __remote_desktop_data_dir }}/tls.key"
+__remote_desktop_supplied_cert: "{{ __remote_desktop_data_dir }}/tls-supplied.crt"
+__remote_desktop_supplied_key: "{{ __remote_desktop_data_dir }}/tls-supplied.key"
+__remote_desktop_managed_files:
+  - "{{ __remote_desktop_selfsigned_cert }}"
+  - "{{ __remote_desktop_selfsigned_key }}"
+  - "{{ __remote_desktop_supplied_cert }}"
+  - "{{ __remote_desktop_supplied_key }}"
+  - "{{ __remote_desktop_override_conf }}"
+__remote_desktop_credential_stores:
+  - "{{ __remote_desktop_data_dir }}/credentials.ini"
+  - "{{ __remote_desktop_data_dir }}/rdp-credentials.priv"
+
+__remote_desktop_selfsigned_days: "720"
+__remote_desktop_renew_seconds: "2592000"
+__remote_desktop_key_spec: rsa:4096
+__remote_desktop_cn_max: 64
+
+__remote_desktop_password_min_length: 15
+__remote_desktop_context_name_min_length: 4
+
+__remote_desktop_listen_retries: 30
+__remote_desktop_listen_delay: 2
+
+# HOME is set for the child only: in root's module Python it would load the account's user site
+__remote_desktop_runuser:
+  - runuser
+  - -u
+  - "{{ __remote_desktop_user }}"
+  - --
+  - env
+  - LC_ALL=C
+  - "HOME={{ __remote_desktop_home }}"
+
+# Patterns for the input checks, os-release, grd.conf, ss -p, grdctl and busctl
+__remote_desktop_bad_chars_pattern: '[\x00-\x1f\x7f-\x9f\N{LINE SEPARATOR}\N{PARAGRAPH SEPARATOR}]'
+__remote_desktop_username_forbidden_pattern: '[:\\]'
+__remote_desktop_variant_id_pattern: '(?m)^VARIANT_ID=["'']?([^"''\n]*)'
+__remote_desktop_conf_enabled_pattern: '(?ms)^\[RDP\][^\[]*?^[ \t]*enabled[ \t]*=[ \t]*(true|1)[ \t]*$'
+__remote_desktop_ss_process_pattern: '\("([^"]*)",pid=([0-9]+),'
+__remote_desktop_credential_line_pattern: '^\t(Username|Password): '
+__remote_desktop_credential_value_pattern: '^\t(Username|Password): (?!\(null\)$|\(empty\)$).'
+__remote_desktop_busctl_string_pattern: '^s "(.*)"$'
+
+# grd.conf names the copies of a supplied pair, else the self-signed pair
+__remote_desktop_supplied: "{{ remote_desktop_enabled | bool
+  and remote_desktop_cert | d('', true) | length > 0 }}"
+__remote_desktop_active_cert: "{{ __remote_desktop_supplied_cert if __remote_desktop_supplied | bool
+  else __remote_desktop_selfsigned_cert }}"
+__remote_desktop_active_key: "{{ __remote_desktop_supplied_key if __remote_desktop_supplied | bool
+  else __remote_desktop_selfsigned_key }}"
+
 # ansible_facts required by the role
-__template_required_facts:
+__remote_desktop_required_facts:
   - distribution
   - distribution_major_version
   - distribution_version
   - os_family
+  - fqdn
+  - hostname
 # the subsets of ansible_facts that need to be gathered in case any of the
 # facts in required_facts is missing; see the documentation of
 # the 'gather_subset' parameter of the 'setup' module
-__template_required_facts_subsets: "{{ ['!all', '!min'] +
-  __template_required_facts }}"
-
-__template_write_log_file: false
+__remote_desktop_required_facts_subsets:
+  - "!all"
+  - "!min"
+  - distribution
+  - platform
 
 # BEGIN - DO NOT EDIT THIS BLOCK - rh distros variables
 # Ansible distribution identifiers that the role treats like RHEL
-__template_rh_distros:
+__remote_desktop_rh_distros:
   - AlmaLinux
   - CentOS
   - RedHat
   - Rocky
 
 # Same as above but includes Fedora
-__template_rh_distros_fedora: "{{ __template_rh_distros + ['Fedora'] }}"
+__remote_desktop_rh_distros_fedora: "{{ __remote_desktop_rh_distros + ['Fedora'] }}"
 
 # Use this in conditionals to check if distro is Red Hat or clone
-__template_is_rh_distro: "{{ ansible_facts['distribution'] in __template_rh_distros }}"
+__remote_desktop_is_rh_distro: "{{ ansible_facts['distribution'] in __remote_desktop_rh_distros }}"
 
 # Use this in conditionals to check if distro is Red Hat or clone, or Fedora
-__template_is_rh_distro_fedora: "{{ ansible_facts['distribution'] in __template_rh_distros_fedora }}"
+__remote_desktop_is_rh_distro_fedora: "{{ ansible_facts['distribution'] in __remote_desktop_rh_distros_fedora }}"
 
 # Use these in conditionals to check if distro is Red Hat or clone of a specific major version
-__template_is_rh_distro_7: "{{ __template_is_rh_distro and ansible_facts['distribution_major_version'] == '7' }}"
-__template_is_rh_distro_8: "{{ __template_is_rh_distro and ansible_facts['distribution_major_version'] == '8' }}"
-__template_is_rh_distro_9: "{{ __template_is_rh_distro and ansible_facts['distribution_major_version'] == '9' }}"
-__template_is_rh_distro_10: "{{ __template_is_rh_distro and ansible_facts['distribution_major_version'] == '10' }}"
+__remote_desktop_is_rh_distro_7: "{{ __remote_desktop_is_rh_distro and ansible_facts['distribution_major_version'] == '7' }}"
+__remote_desktop_is_rh_distro_8: "{{ __remote_desktop_is_rh_distro and ansible_facts['distribution_major_version'] == '8' }}"
+__remote_desktop_is_rh_distro_9: "{{ __remote_desktop_is_rh_distro and ansible_facts['distribution_major_version'] == '9' }}"
+__remote_desktop_is_rh_distro_10: "{{ __remote_desktop_is_rh_distro and ansible_facts['distribution_major_version'] == '10' }}"
 # END - DO NOT EDIT THIS BLOCK - rh distros variables

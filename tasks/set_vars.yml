@@ -1,34 +1,89 @@
 ---
 - name: Ensure ansible_facts used by role
-  setup:
-    gather_subset: "{{ __template_required_facts_subsets }}"
-  when: __template_required_facts |
+  ansible.builtin.setup:
+    gather_subset: "{{ __remote_desktop_required_facts_subsets }}"
+  when: __remote_desktop_required_facts |
     difference(ansible_facts.keys() | list) | length > 0
 
-- name: Record role begin fingerprint
-  sr_fingerprint:
-    status: begin
-    role_name: template
-    role_path: "{{ role_path }}"
-    ansible_play_hosts_all: "{{ ansible_play_hosts_all }}"
-    distribution: "{{ ansible_facts['distribution'] }}"
-    distribution_version: "{{ ansible_facts['distribution_version'] }}"
-    write_log_file: "{{ __template_write_log_file }}"
+# ansible_check_mode reflects only --check; a command module also skips under the check_mode keyword
+- name: Detect check mode
+  ansible.builtin.command:
+    argv:
+      - "true"
+  register: __remote_desktop_check_probe
+  changed_when: false
+
+- name: Reset the run state of the role
+  ansible.builtin.set_fact:
+    __remote_desktop_check_mode: "{{ __remote_desktop_check_probe is skipped }}"
+    __remote_desktop_package_result: {}
+    __remote_desktop_packages_live: {}
+    __remote_desktop_login_on: false
+    __remote_desktop_marker_present: false
+    __remote_desktop_store_present: false
+    __remote_desktop_port_holders: []
+    __remote_desktop_port_foreign: []
+    __remote_desktop_main_pid: "0"
+    __remote_desktop_credentials: ""
+    __remote_desktop_credentials_match: false
+    remote_desktop_tls_fingerprint: ""
 
 - name: Determine if system is ostree and set flag
-  when: not __template_is_ostree is defined
+  when: not __remote_desktop_is_ostree is defined
   block:
     - name: Check if system is ostree
-      stat:
+      ansible.builtin.stat:
         path: /run/ostree-booted
       register: __ostree_booted_stat
 
     - name: Set flag to indicate system is ostree
-      set_fact:
-        __template_is_ostree: "{{ __ostree_booted_stat.stat.exists }}"
+      ansible.builtin.set_fact:
+        __remote_desktop_is_ostree: "{{ __ostree_booted_stat.stat.exists }}"
+
+- name: Determine if system is booted with systemd
+  when: __remote_desktop_is_booted is not defined
+  block:
+    - name: Run systemctl
+      ansible.builtin.command:  # noqa command-instead-of-module
+        cmd: systemctl is-system-running
+      register: __is_system_running
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Require installed systemd
+      ansible.builtin.fail:
+        msg: "Error: This role requires systemd to be installed."
+      when: '"No such file or directory" in __is_system_running.msg | d("")'
+
+    - name: Set flag to indicate that systemd runtime operations are available
+      ansible.builtin.set_fact:
+        __remote_desktop_is_booted: "{{ __is_system_running.stdout != 'offline' }}"
+
+- name: Determine if system is transactional update and set flag
+  when: not __remote_desktop_is_transactional is defined
+  block:
+    - name: Check if transactional-update exists in /sbin
+      ansible.builtin.stat:
+        path: /sbin/transactional-update
+      register: __transactional_update_stat
+
+    - name: Set flag if transactional-update exists
+      ansible.builtin.set_fact:
+        __remote_desktop_is_transactional: "{{ __transactional_update_stat.stat.exists }}"
+
+- name: Read the operating system release information
+  ansible.builtin.slurp:
+    src: /etc/os-release
+  register: __remote_desktop_os_release
+
+- name: Set the operating system variant
+  ansible.builtin.set_fact:
+    __remote_desktop_variant_id: "{{ __remote_desktop_os_release.content | b64decode
+      | regex_findall(__remote_desktop_variant_id_pattern) | first | d('') }}"
 
 - name: Set platform/version specific variables
-  include_vars: "{{ __vars_file }}"
+  ansible.builtin.include_vars: "{{ __vars_file }}"
   loop:
     - "{{ ansible_facts['os_family'] }}.yml"
     - "{{ ansible_facts['distribution'] }}.yml"

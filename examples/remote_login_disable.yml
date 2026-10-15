@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: MIT
+---
+# Turn GNOME Remote Desktop remote login off on this host. Run it on the host
+# itself:  sudo ansible-playbook -c local -i localhost, <path of this file>
+- name: Turn off remote login over RDP
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: false
+  vars:
+    ansible_pipelining: true
+    remote_desktop_enabled: false
+    remote_desktop_manage_firewall: true
+  roles:
+    - role: suse.linux_system_roles.remote_desktop

@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MIT
+---
+# Input: __rd_secrets, every password the test used
+- name: Count the journal lines of this boot that carry a test password
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: set -o pipefail; journalctl -b --no-pager | grep -cF -- "$RD_TEST_SECRET" || true
+  environment:
+    RD_TEST_SECRET: "{{ item }}"
+  loop: "{{ __rd_secrets }}"
+  register: __rd_journal
+  changed_when: false
+  no_log: true
+
+- name: Assert that no journal line carries a test password
+  ansible.builtin.assert:
+    that:
+      - __rd_journal.results | map(attribute='stdout') | map('int') | sum == 0
+    fail_msg: "Journal lines per test password: {{ __rd_journal.results | map(attribute='stdout') | list }}"
+    quiet: true

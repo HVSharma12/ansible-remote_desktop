@@ -1,0 +1,69 @@
+# SPDX-License-Identifier: MIT
+---
+- name: Read the state of firewalld
+  ansible.builtin.service_facts:
+  no_log: "{{ ansible_verbosity < 3 }}"
+  when: __remote_desktop_is_booted | bool
+
+- name: Record the state of firewalld
+  ansible.builtin.set_fact:
+    __remote_desktop_firewalld_state: >-
+      {{ 'not running' if not __remote_desktop_is_booted | bool
+      else 'absent' if __unit | length == 0
+      else 'masked' if __unit.status | d('') == 'masked'
+      else 'not enabled' if __unit.status | d('') != 'enabled'
+      else 'not running' if __unit.state | d('') != 'running'
+      else 'running' }}
+    __remote_desktop_firewall_closable: "{{ __remote_desktop_marker_present | bool
+      and __remote_desktop_port_foreign | length == 0 }}"
+  vars:
+    __unit: "{{ ansible_facts['services']['firewalld.service'] | d({})
+      if __remote_desktop_is_booted | bool else {} }}"
+
+# The firewall role installs, unmasks, enables and starts firewalld: all no-ops in one that runs
+- name: Open or close the rdp service in firewalld
+  ansible.builtin.include_role:
+    name: fedora.linux_system_roles.firewall
+  vars:
+    firewall:
+      - service: "{{ __remote_desktop_firewall_service }}"
+        state: "{{ 'enabled' if remote_desktop_enabled | bool else 'disabled' }}"
+        permanent: true
+        runtime: true
+    firewall_transactional_update_reboot_ok: "{{ remote_desktop_transactional_update_reboot_ok }}"
+    # The firewall role sets check_mode on its tasks from ansible_check_mode unless this is given
+    __firewall_test_check_mode: "{{ __remote_desktop_check_mode | bool }}"
+  when:
+    - __remote_desktop_firewalld_state == 'running'
+    - remote_desktop_enabled | bool or __remote_desktop_firewall_closable | bool
+
+- name: Report that no host firewall rule was added
+  ansible.builtin.debug:
+    msg: >-
+      No host firewall rule was added: firewalld is {{ __remote_desktop_firewalld_state }}.
+      RDP clients need TCP port {{ __remote_desktop_port }} reachable.{{
+      ' firewalld will start with port ' ~ __remote_desktop_port ~ ' closed.'
+      if __remote_desktop_firewalld_state == 'not running' and __remote_desktop_is_booted | bool
+      else '' }}
+  when:
+    - remote_desktop_enabled | bool
+    - __remote_desktop_firewalld_state != 'running'
+
+- name: Report that no host firewall rule was removed
+  ansible.builtin.debug:
+    msg: "No host firewall rule was removed: {{ __reason }}"
+  vars:
+    __kept: >-
+      {{ " An rdp entry added earlier stays in firewalld's permanent configuration."
+      if __remote_desktop_marker_present | bool and __remote_desktop_firewalld_state != 'absent'
+      else '' }}
+    __reason: >-
+      {{ 'firewalld is ' ~ __remote_desktop_firewalld_state ~ '.' ~ __kept
+      if __remote_desktop_firewalld_state != 'running'
+      else 'this role did not set up remote login on this host.'
+      if not __remote_desktop_marker_present | bool
+      else 'another program listens on TCP port ' ~ __remote_desktop_port ~ ': '
+      ~ __remote_desktop_port_foreign | map('join', ' pid ') | join(', ') ~ '.' }}
+  when:
+    - not remote_desktop_enabled | bool
+    - __remote_desktop_firewalld_state != 'running' or not __remote_desktop_firewall_closable | bool

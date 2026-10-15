@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: MIT
+---
+# Input: role variables, __rd_leg, __rd_expect (texts the refusal names), __rd_secret (it must not), __rd_start
+- name: Run the role with invalid input
+  block:
+    - name: Include the role
+      ansible.builtin.include_role:
+        name: linux-system-roles.remote_desktop
+
+    - name: Record that the role accepted the input
+      ansible.builtin.set_fact:
+        __rd_refused: false
+        __rd_refusal: ""
+  rescue:
+    - name: Record the refusal
+      ansible.builtin.set_fact:
+        __rd_refused: true
+        __rd_refusal: >-
+          {{ ([ansible_failed_result.msg | d('')]
+          + (ansible_failed_result.results | d([]) | map(attribute='msg') | map('default', '') | list))
+          | map('string') | join(' ') }}
+
+- name: Read the state after the run
+  ansible.builtin.include_tasks: read_state.yml
+
+- name: Assert the input was refused before any change
+  ansible.builtin.assert:
+    that:
+      - __rd_refused
+      - __rd_expect | reject('in', __rd_refusal) | list | length == 0
+      - __rd_secret | d('') | length == 0 or __rd_secret not in __rd_refusal
+      - __rd_state.installed == __rd_start.installed
+      - __rd_state.enabled == __rd_start.enabled
+      - __rd_state.active == __rd_start.active
+      - __rd_state.main_pid == __rd_start.main_pid
+      - __rd_state.conf_sha256 == __rd_start.conf_sha256
+    fail_msg: >-
+      {{ __rd_leg }}: refused={{ __rd_refused }}, expected the message to name
+      {{ __rd_expect | join(', ') }}; message:
+      {{ __rd_refusal | replace(__rd_secret, '<password>') if __rd_secret | d('') | length > 0 else __rd_refusal }}
+    quiet: true

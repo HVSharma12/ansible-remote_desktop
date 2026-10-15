@@ -1,14 +1,22 @@
 # SPDX-License-Identifier: MIT
 ---
-# Here is the right place to put the role's input variables.
-# This file also serves as a documentation for such a variables.
+# Turn remote login on (true) or off (false)
+remote_desktop_enabled: true
 
-# Examples of role input variables:
-template_foo: foo
-template_bar: true
-template_baz: 0
-template_config_path: /etc/template.conf
-template_state: enabled
-template_packages: []
-template_raw_value: ""
-template_services: []
+# The user name and password RDP clients send; set both or neither
+remote_desktop_username: null
+remote_desktop_password: null
+
+# Absolute paths of a PEM certificate and its unencrypted key on the managed
+# host; unset, the role generates a self-signed pair
+remote_desktop_cert: null
+remote_desktop_private_key: null
+
+# Open the rdp service in a firewalld that is already enabled and running
+remote_desktop_manage_firewall: false
+
+# Hide passwords and keys in the output of the tasks that handle them
+remote_desktop_secure_logging: true
+
+# Transactional update reboot: true reboots, false ends the role, null fails
+remote_desktop_transactional_update_reboot_ok: null

@@ -1,0 +1,204 @@
+# SPDX-License-Identifier: MIT
+---
+- name: Open the RDP port only in a firewalld that is installed, enabled and running
+  hosts: all
+  vars:
+    __rd_conf: /etc/gnome-remote-desktop/grd.conf
+  tasks:
+    - name: Test the firewall
+      block:
+        - name: Generate the test credentials
+          ansible.builtin.include_tasks: tasks/setup_credentials.yml
+
+        - name: Read firewalld before the first run
+          ansible.builtin.include_tasks: tasks/read_firewall.yml
+
+        - name: Require a host without firewalld, which this test installs as a fixture
+          ansible.builtin.assert:
+            that:
+              - __rd_fw.installed == 'no'
+            fail_msg: firewalld is already installed on this host
+            quiet: true
+
+        - name: No firewalld installed
+          ansible.builtin.include_tasks: tasks/firewall_leg.yml
+          vars:
+            __rd_leg: no firewalld installed
+            __rd_fw_expect: unchanged
+            remote_desktop_username: "{{ __rd_test_user }}"
+            remote_desktop_password: "{{ __rd_test_pass }}"
+            remote_desktop_manage_firewall: true
+
+        - name: Assert that firewalld is still not installed
+          ansible.builtin.assert:
+            that:
+              - __rd_fw.installed == 'no'
+            quiet: true
+
+        - name: Install, enable and start firewalld
+          ansible.builtin.include_tasks: tasks/setup_firewalld.yml
+
+        - name: Add another service to the default zone
+          ansible.builtin.command:
+            argv: "{{ ['firewall-cmd', '--zone=' ~ __rd_fw_zone, '--add-service=http'] + item }}"
+          loop:
+            - []
+            - [--permanent]
+          changed_when: true
+
+        - name: Firewalld enabled and running
+          ansible.builtin.include_tasks: tasks/firewall_leg.yml
+          vars:
+            __rd_leg: firewalld enabled and running
+            __rd_fw_expect: added
+            remote_desktop_username: "{{ __rd_test_user }}"
+            remote_desktop_password: "{{ __rd_test_pass }}"
+            remote_desktop_manage_firewall: true
+
+        # A run that repeats the previous run's credentials and changes nothing is itself the second run
+        - name: Firewalld running and remote_desktop_manage_firewall false
+          ansible.builtin.include_tasks: tasks/firewall_leg.yml
+          vars:
+            __rd_leg: remote_desktop_manage_firewall false
+            __rd_fw_expect: unchanged
+            __rd_fw_second_run: false
+            remote_desktop_username: "{{ __rd_test_user }}"
+            remote_desktop_password: "{{ __rd_test_pass }}"
+            remote_desktop_manage_firewall: false
+
+        - name: Turn remote login off where this role set it up
+          ansible.builtin.include_tasks: tasks/firewall_leg.yml
+          vars:
+            __rd_leg: remote_desktop_enabled false with the role's marker
+            __rd_fw_expect: removed
+            remote_desktop_enabled: false
+            remote_desktop_manage_firewall: true
+
+        - name: Open rdp by hand
+          ansible.builtin.command:
+            argv: "{{ ['firewall-cmd', '--zone=' ~ __rd_fw_zone, '--add-service=rdp'] + item }}"
+          loop:
+            - []
+            - [--permanent]
+          changed_when: true
+
+        - name: Start a listener on port 3389 that is not the daemon
+          ansible.builtin.include_tasks: tasks/start_listener.yml
+
+        - name: Turn remote login off while another program holds port 3389
+          ansible.builtin.include_tasks: tasks/firewall_leg.yml
+          vars:
+            __rd_leg: remote_desktop_enabled false with another program on port 3389
+            __rd_fw_expect: unchanged
+            remote_desktop_enabled: false
+            remote_desktop_manage_firewall: true
+
+        - name: Assert that rdp stayed open
+          ansible.builtin.assert:
+            that:
+              - __rd_fw.rdp_permanent == 'yes'
+              - "'rdp' in __rd_fw.services_runtime.split()"
+            quiet: true
+
+        - name: Stop the listener
+          ansible.builtin.systemd_service:
+            name: rdtest-listener.service
+            state: stopped
+
+        - name: Close rdp by hand
+          ansible.builtin.command:
+            argv: "{{ ['firewall-cmd', '--zone=' ~ __rd_fw_zone, '--remove-service=rdp'] + item }}"
+          loop:
+            - []
+            - [--permanent]
+          changed_when: true
+
+        - name: Stop firewalld and leave it enabled
+          ansible.builtin.systemd_service:
+            name: firewalld.service
+            state: stopped
+
+        - name: Firewalld enabled but stopped
+          ansible.builtin.include_tasks: tasks/firewall_leg.yml
+          vars:
+            __rd_leg: firewalld enabled but stopped
+            __rd_fw_expect: unchanged
+            remote_desktop_username: "{{ __rd_test_user }}"
+            remote_desktop_password: "{{ __rd_test_pass }}"
+            remote_desktop_manage_firewall: true
+
+        - name: Mask firewalld
+          ansible.builtin.systemd_service:
+            name: firewalld.service
+            masked: true
+
+        - name: Firewalld masked
+          ansible.builtin.include_tasks: tasks/firewall_leg.yml
+          vars:
+            __rd_leg: firewalld masked
+            __rd_fw_expect: unchanged
+            __rd_fw_second_run: false
+            remote_desktop_username: "{{ __rd_test_user }}"
+            remote_desktop_password: "{{ __rd_test_pass }}"
+            remote_desktop_manage_firewall: true
+
+        - name: Unmask, disable and start firewalld
+          ansible.builtin.systemd_service:
+            name: firewalld.service
+            masked: false
+            enabled: false
+            state: started
+
+        - name: Firewalld running but disabled
+          ansible.builtin.include_tasks: tasks/firewall_leg.yml
+          vars:
+            __rd_leg: firewalld running but disabled
+            __rd_fw_expect: unchanged
+            __rd_fw_second_run: false
+            remote_desktop_username: "{{ __rd_test_user }}"
+            remote_desktop_password: "{{ __rd_test_pass }}"
+            remote_desktop_manage_firewall: true
+
+        - name: Assert that the stopped, masked and disabled firewalld never got rdp
+          ansible.builtin.assert:
+            that:
+              - __rd_fw.rdp_permanent == 'no'
+              - "'rdp' not in __rd_fw.services_runtime.split()"
+            quiet: true
+
+        - name: Enable firewalld again
+          ansible.builtin.systemd_service:
+            name: firewalld.service
+            enabled: true
+
+        - name: Open rdp by hand again
+          ansible.builtin.command:
+            argv: "{{ ['firewall-cmd', '--zone=' ~ __rd_fw_zone, '--add-service=rdp'] + item }}"
+          loop:
+            - []
+            - [--permanent]
+          changed_when: true
+
+        - name: Remove grd.conf, and with it the role's marker
+          ansible.builtin.file:
+            path: "{{ __rd_conf }}"
+            state: absent
+
+        - name: Turn remote login off where the role's marker is missing
+          ansible.builtin.include_tasks: tasks/firewall_leg.yml
+          vars:
+            __rd_leg: remote_desktop_enabled false without the role's marker
+            __rd_fw_expect: unchanged
+            remote_desktop_enabled: false
+            remote_desktop_manage_firewall: true
+
+        - name: Assert that the rdp entry the role did not set up stayed open
+          ansible.builtin.assert:
+            that:
+              - __rd_fw.rdp_permanent == 'yes'
+              - "'rdp' in __rd_fw.services_runtime.split()"
+            quiet: true
+      always:
+        - name: Clean up
+          ansible.builtin.include_tasks: tasks/cleanup.yml
+          tags: tests::cleanup
