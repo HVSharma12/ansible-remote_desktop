@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: MIT
+---
+# Put the role's internal variables here that are not distribution specific.
+# You can override these by defining the same variable with a different
+# value in a platform/version specific file in vars/
+
+# Examples of non-distribution specific (generic) internal variables:
+__template_foo_config: foo.conf
+__template_packages: []
+__template_services: []
+# ansible_facts required by the role
+__template_required_facts:
+  - distribution
+  - distribution_major_version
+  - distribution_version
+  - os_family
+# the subsets of ansible_facts that need to be gathered in case any of the
+# facts in required_facts is missing; see the documentation of
+# the 'gather_subset' parameter of the 'setup' module
+__template_required_facts_subsets: "{{ ['!all', '!min'] +
+  __template_required_facts }}"
+
+__template_write_log_file: false
+
+# BEGIN - DO NOT EDIT THIS BLOCK - rh distros variables
+# Ansible distribution identifiers that the role treats like RHEL
+__template_rh_distros:
+  - AlmaLinux
+  - CentOS
+  - RedHat
+  - Rocky
+
+# Same as above but includes Fedora
+__template_rh_distros_fedora: "{{ __template_rh_distros + ['Fedora'] }}"
+
+# Use this in conditionals to check if distro is Red Hat or clone
+__template_is_rh_distro: "{{ ansible_facts['distribution'] in __template_rh_distros }}"
+
+# Use this in conditionals to check if distro is Red Hat or clone, or Fedora
+__template_is_rh_distro_fedora: "{{ ansible_facts['distribution'] in __template_rh_distros_fedora }}"
+
+# Use these in conditionals to check if distro is Red Hat or clone of a specific major version
+__template_is_rh_distro_7: "{{ __template_is_rh_distro and ansible_facts['distribution_major_version'] == '7' }}"
+__template_is_rh_distro_8: "{{ __template_is_rh_distro and ansible_facts['distribution_major_version'] == '8' }}"
+__template_is_rh_distro_9: "{{ __template_is_rh_distro and ansible_facts['distribution_major_version'] == '9' }}"
+__template_is_rh_distro_10: "{{ __template_is_rh_distro and ansible_facts['distribution_major_version'] == '10' }}"
+# END - DO NOT EDIT THIS BLOCK - rh distros variables
