@@ -7,8 +7,10 @@ through GDM.
 
 ## Requirements
 
-The role supports SLES 16.0 and openSUSE Leap 16.0 managed nodes. The control
-node needs ansible-core 2.18 or later.
+The role supports SLES 16, openSUSE Leap 16 and Fedora 44 managed nodes. On
+each it supports the major version of gnome-remote-desktop that the platform
+ships: 48 on SLES and openSUSE Leap, and 50 on Fedora 44. The control node
+needs ansible-core 2.18 or later.
 
 - The role runs as root, so a play that connects as another user needs
   `become: true`.
@@ -31,8 +33,9 @@ ansible-galaxy collection install -vv -r meta/collection-requirements.yml
 
 ## What the role changes
 
-- It installs `patterns-gnome-gnome`, `gnome-remote-desktop`, `gnome-console`
-  and `openssl` with their required dependencies, and no recommended packages.
+- It installs `gnome-remote-desktop`, `openssl`, GDM and a GNOME session:
+  `patterns-gnome-gnome` and `gnome-console` on SLES and openSUSE Leap, and
+  `gdm`, `gnome-shell`, `gnome-session-wayland-session` and `ptyxis` on Fedora.
 - It makes `graphical.target` the default boot target and enables and starts
   `gdm.service` at once. No reboot is needed.
 - It enables and starts `gnome-remote-desktop.service`. The daemon listens on

@@ -5,7 +5,10 @@
   vars:
     __rd_data: /var/lib/gnome-remote-desktop/.local/share/gnome-remote-desktop
     __rd_conf: /etc/gnome-remote-desktop/grd.conf
-    __rd_packages: [patterns-gnome-gnome, gnome-remote-desktop, gnome-console, openssl]
+    __rd_packages: "{{ __rd_packages_by_family[ansible_facts['os_family']] }}"
+    __rd_packages_by_family:
+      Suse: [patterns-gnome-gnome, gnome-remote-desktop, gnome-console, openssl]
+      RedHat: [gdm, gnome-shell, gnome-session-wayland-session, gnome-remote-desktop, ptyxis, openssl]
   tasks:
     - name: Test remote login
       block:

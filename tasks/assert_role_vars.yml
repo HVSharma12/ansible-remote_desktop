@@ -3,11 +3,11 @@
 - name: Assert the host is a supported platform
   ansible.builtin.assert:
     that:
-      - ansible_facts['distribution'] in __remote_desktop_supported_distributions
-      - ansible_facts['distribution_major_version'] == __remote_desktop_supported_major_version
+      - __remote_desktop_supported_platforms[ansible_facts['distribution']] | d('')
+        == ansible_facts['distribution_major_version']
       - __remote_desktop_variant_id not in __remote_desktop_refused_variant_ids
     fail_msg: >-
-      This role supports SLES 16 and openSUSE Leap 16, but not their
+      This role supports SLES 16, openSUSE Leap 16 and Fedora 44, but not
       transactional variants such as SLES 16.1 Immutable. This host is
       {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}{{
       ' (VARIANT_ID ' ~ __remote_desktop_variant_id ~ ')'

@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: MIT
+---
+__remote_desktop_packages:
+  - gdm
+  - gnome-shell
+  - gnome-session-wayland-session
+  - gnome-remote-desktop
+  - ptyxis
+  - openssl
+__remote_desktop_grd_major: "50"

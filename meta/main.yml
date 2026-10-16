@@ -16,6 +16,9 @@ galaxy_info:
     - name: opensuse
       versions:
         - all
+    - name: Fedora
+      versions:
+        - all
   galaxy_tags:
     - leap16
     - sles

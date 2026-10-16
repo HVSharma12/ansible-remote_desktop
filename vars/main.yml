@@ -4,11 +4,12 @@
 # You can override these by defining the same variable with a different
 # value in a platform/version specific file in vars/
 
-__remote_desktop_supported_distributions:
-  - SLES
-  - SLES_SAP
-  - openSUSE Leap
-__remote_desktop_supported_major_version: "16"
+# The supported major version of each distribution
+__remote_desktop_supported_platforms:
+  SLES: "16"
+  SLES_SAP: "16"
+  openSUSE Leap: "16"
+  Fedora: "44"
 __remote_desktop_refused_variant_ids:
   - transactional
 
