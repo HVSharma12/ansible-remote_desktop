@@ -1,4 +1,26 @@
 # SPDX-License-Identifier: MIT
 ---
+# tox-lsr's yamllint rules plus the settings ansible-lint requires; long lines warn
+extends: default
 ignore: |
   /.tox/
+rules:
+  braces:
+    max-spaces-inside: 1
+    level: error
+  brackets:
+    max-spaces-inside: 1
+    level: error
+  truthy:
+    allowed-values: ["yes", "no", "true", "false"]
+    level: error
+  document-start: disable
+  comments:
+    min-spaces-from-content: 1
+  comments-indentation: false
+  octal-values:
+    forbid-implicit-octal: true
+    forbid-explicit-octal: true
+  line-length:
+    max: 120
+    level: warning

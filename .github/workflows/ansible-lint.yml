@@ -1,97 +1,44 @@
 ---
 name: Ansible Lint
+
 on:  # yamllint disable-line rule:truthy
-  workflow_call:
-    inputs:
-      requested:
-        description: Run this workflow for an authorized /citest command
-        required: true
-        type: boolean
-env:
-  LSR_ROLE2COLL_NAMESPACE: fedora
-  LSR_ROLE2COLL_NAME: linux_system_roles
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 2 1 * *"
+  workflow_dispatch:
+
 permissions:
   contents: read
-  pull-requests: read
-  # This is required for the ability to create/update the Pull request status
-  statuses: write
+
 jobs:
   ansible_lint:
-    if: inputs.requested || github.event_name != 'issue_comment'
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        # There should be one version which is the one used by the Automation Hub gating, and
-        # one for the latest version.
-        # https://github.com/ansible-collections/partner-certification-checker/blob/main/.github/workflows/certification-reusable.yml#L108
-        versions:
-          - { ansible_lint: "24.*", ansible: "2.16.*", python: "3.12" }
-          - { ansible_lint: "26.*", ansible: "2.20.*", python: "3.13" }
     steps:
-      - name: Get PR head SHA and context
-        if: github.event_name == 'issue_comment'
-        id: head_sha_context
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.issue.number }}
-          CONTEXT: "${{ github.workflow }} / ${{ github.job }} (${{ matrix.versions.ansible_lint }}, ${{ matrix.versions.ansible }}, ${{ matrix.versions.python }}) (pull_request)"
-        run: |
-          set -euxo pipefail
-          head_sha=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.head.sha')
-          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
-          echo "context=$CONTEXT" >> "$GITHUB_OUTPUT"
-
-      - name: Set commit status as pending
-        if: github.event_name == 'issue_comment'
-        uses: myrotvorets/set-commit-status-action@7f84e174036426c90737dbfa32e9fd56859f93d0  # master
-        with:
-          sha: ${{ steps.head_sha_context.outputs.head_sha }}
-          status: pending
-          context: ${{ steps.head_sha_context.outputs.context }}
-          description: Test started
-          targetUrl: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/job/${{ job.check_run_id }}
-
-      - name: Update pip, git
-        run: |
-          set -euxo pipefail
-          sudo apt update
-          sudo apt install -y git
-
-      - name: Checkout repo
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Check out the code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ steps.head_sha_context.outputs.head_sha || github.sha }}
 
-      - name: Install tox, tox-lsr
-        run: |
-          set -euxo pipefail
-          pip3 install "git+https://github.com/linux-system-roles/tox-lsr@bfd11b23a1ed56388ea7ab8263d30e3172553a7c"
-
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7
+      - name: Set up Python 3
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
-          python-version: ${{ matrix.versions.python }}
+          python-version: '3.13'
 
-      - name: Convert role to collection format
-        run: tox -e collection
+      - name: Install test dependencies
+        run: |
+          pip3 install ansible==13.3.0 ansible-core==2.20.2 ansible-lint==26.4.0 yamllint==1.38.0
+
+      # fedora.linux_system_roles is not part of the ansible package
+      - name: Install the role's collections
+        run: |
+          ansible-galaxy collection install -r meta/collection-requirements.yml
+
+      - name: Run yamllint
+        run: |
+          yamllint -c .yamllint.yml .
 
       - name: Run ansible-lint
         run: |
-          set -euxo pipefail
-          LSR_ANSIBLE_LINT_DEP="ansible-lint==${{ matrix.versions.ansible_lint }}" \
-          LSR_ANSIBLE_LINT_ANSIBLE_DEP="ansible-core==${{ matrix.versions.ansible }}" \
-          tox -x testenv:ansible-lint-collection.basepython="python${{ matrix.versions.python }}" \
-          -e ansible-lint-collection
-
-      - name: Set final commit status
-        if: always() && github.event_name == 'issue_comment' && steps.head_sha_context.outputs.head_sha != ''
-        uses: myrotvorets/set-commit-status-action@7f84e174036426c90737dbfa32e9fd56859f93d0  # master
-        with:
-          sha: ${{ steps.head_sha_context.outputs.head_sha }}
-          status: ${{ job.status }}
-          context: ${{ steps.head_sha_context.outputs.context }}
-          description: Test finished
-          targetUrl: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/job/${{ job.check_run_id }}
+          ansible-lint --offline -v

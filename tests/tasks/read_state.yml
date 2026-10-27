@@ -24,13 +24,15 @@
       fp_self=$(fp "$data/tls.crt")
       fp_supplied=$(fp "$data/tls-supplied.crt")
       since={{ ('@' ~ __rd_since) if __rd_since is defined else 'now' }}
-      starts=$(journalctl -q -o json --since "$since" MESSAGE_ID=39f53479d3a045ac8e11786248231fbf UNIT="$unit" | grep -c __CURSOR)
+      starts=$(journalctl -q -o json --since "$since" \
+        MESSAGE_ID=39f53479d3a045ac8e11786248231fbf UNIT="$unit" | grep -c __CURSOR)
       echo "now: '$(date +%s.%N)'"
       echo "installed: '$installed'"
       echo "enabled: '${enabled:-absent}'"
       echo "active: '$(systemctl is-active "$unit")'"
       echo "main_pid: '$(systemctl show -P MainPID "$unit")'"
-      echo "listener_pids: '$(ss -Hltnp 'sport = :3389' | grep -o 'pid=[0-9]*' | cut -d = -f 2 | sort -u | tr '\n' ' ')'"
+      echo "listener_pids: '$(ss -Hltnp 'sport = :3389' | grep -o 'pid=[0-9]*' |
+        cut -d = -f 2 | sort -u | tr '\n' ' ')'"
       echo "default_target: '$(systemctl get-default)'"
       echo "gdm_enabled: '${gdm_enabled:-absent}'"
       echo "gdm_active: '$(systemctl is-active gdm.service)'"
@@ -59,7 +61,8 @@
 
 - name: Keep the state
   ansible.builtin.set_fact:
-    __rd_state: "{{ __rd_state_raw.stdout | from_yaml | combine({'status': __rd_status, 'status_fp': __rd_status_fp}) }}"
+    __rd_state: "{{ __rd_state_raw.stdout | from_yaml
+      | combine({'status': __rd_status, 'status_fp': __rd_status_fp}) }}"
   vars:
     __rd_status: "{{ __rd_status_raw.stdout_lines | d([]) | map('trim') | list }}"
     __rd_status_fp: >-
