@@ -1,6 +1,13 @@
 Changelog
 =========
 
+[1.1.2] - 2026-10-28
+--------------------
+
+### Other Changes
+
+- docs: keep the platforms and prerequisites in the packaged README
+
 [1.1.1] - 2026-10-28
 --------------------
 
