@@ -5,7 +5,7 @@ configures the gnome-remote-desktop system daemon to accept RDP clients that
 authenticate with one RDP user name and password, and to serve remote login
 through GDM.
 
-## Requirements
+## Platforms and prerequisites
 
 The role supports SLES 16, openSUSE Leap 16 and Fedora 44 managed nodes. On
 each it supports the major version of gnome-remote-desktop that the platform
@@ -20,6 +20,10 @@ needs ansible-core 2.18 or later.
   On SLES cloud images, the default user that cloud-init creates has none.
 - On a system it cannot manage, the role stops with a message before it
   changes anything.
+- On openSUSE Leap 16 and Fedora 44, GNOME suspends a physical host after 15
+  idle minutes, also at the login screen, and remote login is then unavailable
+  until the host wakes. SLES sets no idle suspend. The role does not change
+  power settings.
 
 ### Collection requirements
 
