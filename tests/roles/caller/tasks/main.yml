@@ -2,9 +2,9 @@
 # tasks file for caller
 
 - name: Include role
-  include_role:
+  ansible.builtin.include_role:
     name: "{{ roletoinclude }}"
 
 - name: Assert variable not overridden
-  assert:
+  ansible.builtin.assert:
     that: not __caller_override

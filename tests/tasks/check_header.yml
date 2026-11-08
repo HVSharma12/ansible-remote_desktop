@@ -1,13 +1,13 @@
 # SPDX-License-Identifier: MIT
 ---
 - name: Get file
-  slurp:
+  ansible.builtin.slurp:
     path: "{{ __file }}"
   register: __content
   when: not __file_content is defined
 
 - name: Check for presence of ansible managed header, fingerprint
-  assert:
+  ansible.builtin.assert:
     that:
       - __ansible_managed in content
       - __fingerprint in content
