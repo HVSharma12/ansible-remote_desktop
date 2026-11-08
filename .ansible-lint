@@ -12,7 +12,6 @@ kinds:
   - vars: "**/tests/vars/*.yml"
   - playbook: "**/examples/*.yml"
 skip_list:
-  - fqcn-builtins
   - var-naming[no-role-prefix]
 exclude_paths:
   - tests/roles/
